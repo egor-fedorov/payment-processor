@@ -10,7 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.api.schemas import PaymentCreateRequest
-from app.core.config import get_settings
+from app.core.config import Settings
 from app.db.models import OutboxMessage, Payment
 from app.domain import PaymentStatus
 from app.messaging.schemas import PaymentRequestedEvent, PaymentWebhookPayload
@@ -115,9 +115,11 @@ class WebhookDelivery:
 
 
 class PaymentProcessingService:
-    def __init__(self, session_factory: async_sessionmaker) -> None:
+    def __init__(
+        self, session_factory: async_sessionmaker[AsyncSession], settings: Settings
+    ) -> None:
         self._session_factory = session_factory
-        self._settings = get_settings()
+        self._settings = settings
 
     async def claim_delivery(self, payment_id: UUID) -> WebhookDelivery | None:
         async with self._session_factory() as session:

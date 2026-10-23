@@ -2,10 +2,11 @@ import asyncio
 import logging
 from datetime import UTC, datetime
 
+from faststream.rabbit import RabbitBroker
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.core.config import get_settings
+from app.core.config import Settings
 from app.db.models import OutboxMessage
 from app.messaging.topology import PAYMENTS_QUEUE
 
@@ -13,8 +14,12 @@ logger = logging.getLogger(__name__)
 
 
 class OutboxDispatcher:
-    def __init__(self, session_factory: async_sessionmaker, broker) -> None:
-        settings = get_settings()
+    def __init__(
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        broker: RabbitBroker,
+        settings: Settings,
+    ) -> None:
         self._session_factory = session_factory
         self._broker = broker
         self._batch_size = settings.outbox_batch_size

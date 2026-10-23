@@ -6,7 +6,9 @@ import pytest
 from sqlalchemy import func, select, update
 
 from app.api.schemas import PaymentCreateRequest
+from app.core.config import get_settings
 from app.db.models import OutboxMessage, Payment
+from app.messaging.schemas import PaymentRequestedEvent
 from app.services.payments import (
     DeliveryBusyError,
     DeliveryExhaustedError,
@@ -14,6 +16,7 @@ from app.services.payments import (
     PaymentProcessingService,
     PaymentService,
 )
+from app.services.webhook import WebhookDeliveryError
 
 pytestmark = pytest.mark.integration
 PAYLOAD = PaymentCreateRequest(
@@ -36,7 +39,7 @@ async def test_concurrent_creation_has_one_payment_and_outbox(session_factory):
 
 async def test_concurrent_claim_and_duplicate_after_success(session_factory):
     payment = await create(session_factory)
-    service = PaymentProcessingService(session_factory)
+    service = PaymentProcessingService(session_factory, get_settings())
     results = await asyncio.gather(
         service.claim_delivery(payment.id),
         service.claim_delivery(payment.id),
@@ -51,7 +54,7 @@ async def test_concurrent_claim_and_duplicate_after_success(session_factory):
 
 async def test_three_attempts_then_terminal_state(session_factory):
     payment = await create(session_factory)
-    service = PaymentProcessingService(session_factory)
+    service = PaymentProcessingService(session_factory, get_settings())
     status = None
     processed_at = None
     for attempt in range(1, 4):
@@ -79,7 +82,7 @@ async def test_three_attempts_then_terminal_state(session_factory):
 
 async def test_crashed_worker_lease_recovers_and_fences_old_result(session_factory):
     payment = await create(session_factory)
-    service = PaymentProcessingService(session_factory)
+    service = PaymentProcessingService(session_factory, get_settings())
     old = await service.claim_delivery(payment.id)
     async with session_factory() as session:
         await session.execute(
@@ -99,20 +102,28 @@ async def test_crashed_worker_lease_recovers_and_fences_old_result(session_facto
 
 
 async def test_retry_publish_failure_keeps_budget_in_database(session_factory, monkeypatch):
-    import app.consumer as consumer
+    from app.consumer import Consumer
+    from app.messaging.broker import create_broker
+
+    consumer = Consumer(
+        create_broker(get_settings()),
+        PaymentProcessingService(session_factory, get_settings()),
+        AsyncMock(),
+        get_settings(),
+    )
 
     payment = await create(session_factory)
     async with session_factory() as session:
         event = await session.scalar(select(OutboxMessage.payload))
-    monkeypatch.setattr(consumer, "processor", PaymentProcessingService(session_factory))
     monkeypatch.setattr(
-        consumer.webhook_sender, "send", AsyncMock(side_effect=consumer.WebhookDeliveryError("503"))
+        consumer, "processor", PaymentProcessingService(session_factory, get_settings())
     )
+    monkeypatch.setattr(consumer.sender, "send", AsyncMock(side_effect=WebhookDeliveryError("503")))
     monkeypatch.setattr(
         consumer.broker, "publish", AsyncMock(side_effect=ConnectionError("broker down"))
     )
     with pytest.raises(ConnectionError):
-        await consumer.process_event(consumer.PaymentRequestedEvent.model_validate(event))
+        await consumer.process_event(PaymentRequestedEvent.model_validate(event))
     async with session_factory() as session:
         row = await session.get(Payment, payment.id)
         assert row.webhook_attempts == 1

@@ -7,6 +7,7 @@ import pytest
 from sqlalchemy import select
 
 from app.api.schemas import PaymentCreateRequest
+from app.core.config import get_settings
 from app.db.models import OutboxMessage
 from app.messaging.broker import create_broker
 from app.messaging.dispatcher import OutboxDispatcher
@@ -49,7 +50,7 @@ async def test_rabbitmq_recreation_keeps_persistent_messages(rabbit):
     await rabbit.publish({"persistence_probe": True}, queue=PAYMENTS_QUEUE, persist=True)
     await rabbit.stop()
     await compose("up", "-d", "--force-recreate", "--wait", "rabbitmq")
-    recovered = create_broker()
+    recovered = create_broker(get_settings())
     await recovered.start()
     try:
         queue = await recovered.declare_queue(PAYMENTS_QUEUE)
@@ -73,7 +74,7 @@ async def test_dispatcher_recovers_after_dependency_restart(service, session_fac
             ),
             "recovery",
         )
-    dispatcher = OutboxDispatcher(session_factory, rabbit)
+    dispatcher = OutboxDispatcher(session_factory, rabbit, get_settings())
     dispatcher._poll_interval = 0.1
     stop = asyncio.Event()
     await compose("stop", service)

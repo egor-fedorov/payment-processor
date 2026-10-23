@@ -8,6 +8,7 @@ import pytest
 from sqlalchemy import select
 
 from app.api.schemas import PaymentCreateRequest
+from app.core.config import get_settings
 from app.db.models import OutboxMessage, Payment
 from app.messaging.dispatcher import OutboxDispatcher
 from app.messaging.schemas import PaymentRequestedEvent
@@ -53,7 +54,7 @@ async def test_outbox_retains_unpublished_message_and_recovers(session_factory, 
     event = await payment_event(session_factory)
     broken = AsyncMock()
     broken.publish.side_effect = ConnectionError("broker unavailable")
-    dispatcher = OutboxDispatcher(session_factory, broken)
+    dispatcher = OutboxDispatcher(session_factory, broken, get_settings())
     with pytest.raises(ConnectionError):
         await dispatcher.dispatch_batch()
     async with session_factory() as session:
@@ -67,8 +68,8 @@ async def test_outbox_retains_unpublished_message_and_recovers(session_factory, 
 
 
 async def test_retry_queues_do_not_block_shorter_delay(rabbit):
-    await rabbit.publish({"delay": 2}, queue=retry_queue(2), persist=True)
-    await rabbit.publish({"delay": 1}, queue=retry_queue(1), persist=True)
+    await rabbit.publish({"delay": 2}, queue=retry_queue(2, get_settings()), persist=True)
+    await rabbit.publish({"delay": 1}, queue=retry_queue(1, get_settings()), persist=True)
     first = await eventually(lambda: receive(rabbit, PAYMENTS_QUEUE))
     assert json.loads(first.body)["delay"] == 1
     await first.ack()
@@ -80,7 +81,15 @@ async def test_retry_queues_do_not_block_shorter_delay(rabbit):
 async def test_consumer_retries_then_dlq_and_ignores_duplicate(
     session_factory, rabbit, monkeypatch
 ):
-    import app.consumer as consumer
+    from app.consumer import Consumer
+    from app.messaging.broker import create_broker
+
+    consumer = Consumer(
+        create_broker(get_settings()),
+        PaymentProcessingService(session_factory, get_settings()),
+        AsyncMock(),
+        get_settings(),
+    )
 
     event = await payment_event(session_factory)
     attempts = []
@@ -89,9 +98,10 @@ async def test_consumer_retries_then_dlq_and_ignores_duplicate(
         attempts.append(monotonic())
         raise WebhookDeliveryError("HTTP 503")
 
-    monkeypatch.setattr(consumer, "processor", PaymentProcessingService(session_factory))
-    monkeypatch.setattr(consumer.webhook_sender, "send", fail)
-    await consumer.startup()
+    monkeypatch.setattr(
+        consumer, "processor", PaymentProcessingService(session_factory, get_settings())
+    )
+    monkeypatch.setattr(consumer.sender, "send", fail)
     await consumer.broker.start()
     try:
         await rabbit.publish(event.model_dump(mode="json"), queue=PAYMENTS_QUEUE, persist=True)
@@ -116,10 +126,18 @@ async def test_consumer_retries_then_dlq_and_ignores_duplicate(
 
 
 async def test_transient_database_error_requeues_message(session_factory, rabbit, monkeypatch):
-    import app.consumer as consumer
+    from app.consumer import Consumer
+    from app.messaging.broker import create_broker
+
+    consumer = Consumer(
+        create_broker(get_settings()),
+        PaymentProcessingService(session_factory, get_settings()),
+        AsyncMock(),
+        get_settings(),
+    )
 
     event = await payment_event(session_factory)
-    service = PaymentProcessingService(session_factory)
+    service = PaymentProcessingService(session_factory, get_settings())
     claim = service.claim_delivery
     calls = 0
 
@@ -133,8 +151,7 @@ async def test_transient_database_error_requeues_message(session_factory, rabbit
     service.claim_delivery = unavailable_once
     monkeypatch.setattr(consumer, "processor", service)
     send = AsyncMock()
-    monkeypatch.setattr(consumer.webhook_sender, "send", send)
-    await consumer.startup()
+    monkeypatch.setattr(consumer.sender, "send", send)
     await consumer.broker.start()
     try:
         await rabbit.publish(event.model_dump(mode="json"), queue=PAYMENTS_QUEUE, persist=True)
@@ -150,10 +167,17 @@ async def test_transient_database_error_requeues_message(session_factory, rabbit
         await consumer.broker.stop()
 
 
-async def test_invalid_json_is_sent_to_dlq(rabbit):
-    import app.consumer as consumer
+async def test_invalid_json_is_sent_to_dlq(rabbit, session_factory):
+    from app.consumer import Consumer
+    from app.messaging.broker import create_broker
 
-    await consumer.startup()
+    consumer = Consumer(
+        create_broker(get_settings()),
+        PaymentProcessingService(session_factory, get_settings()),
+        AsyncMock(),
+        get_settings(),
+    )
+
     await consumer.broker.start()
     try:
         await rabbit.publish(
@@ -175,16 +199,24 @@ async def test_failed_republish_is_requeued_without_resetting_attempts(
     rabbit,
     monkeypatch,
 ):
-    import app.consumer as consumer
+    from app.consumer import Consumer
+    from app.messaging.broker import create_broker
+
+    consumer = Consumer(
+        create_broker(get_settings()),
+        PaymentProcessingService(session_factory, get_settings()),
+        AsyncMock(),
+        get_settings(),
+    )
 
     event = await payment_event(session_factory)
-    service = PaymentProcessingService(session_factory)
+    service = PaymentProcessingService(session_factory, get_settings())
     if destination == "dlq":
         service._settings = service._settings.model_copy(update={"retry_max_attempts": 1})
         monkeypatch.setattr(consumer, "settings", service._settings)
     monkeypatch.setattr(consumer, "processor", service)
     sender = AsyncMock(side_effect=WebhookDeliveryError("HTTP 503"))
-    monkeypatch.setattr(consumer.webhook_sender, "send", sender)
+    monkeypatch.setattr(consumer.sender, "send", sender)
     publish = consumer.broker.publish
     failures = 0
 
@@ -196,7 +228,6 @@ async def test_failed_republish_is_requeued_without_resetting_attempts(
         return await publish(*args, **kwargs)
 
     monkeypatch.setattr(consumer.broker, "publish", unavailable_once)
-    await consumer.startup()
     await consumer.broker.start()
     try:
         await rabbit.publish(event.model_dump(mode="json"), queue=PAYMENTS_QUEUE, persist=True)
@@ -209,10 +240,18 @@ async def test_failed_republish_is_requeued_without_resetting_attempts(
 
 
 async def test_failure_recording_error_keeps_source_message(session_factory, rabbit, monkeypatch):
-    import app.consumer as consumer
+    from app.consumer import Consumer
+    from app.messaging.broker import create_broker
+
+    consumer = Consumer(
+        create_broker(get_settings()),
+        PaymentProcessingService(session_factory, get_settings()),
+        AsyncMock(),
+        get_settings(),
+    )
 
     event = await payment_event(session_factory)
-    service = PaymentProcessingService(session_factory)
+    service = PaymentProcessingService(session_factory, get_settings())
     service._settings = service._settings.model_copy(
         update={
             "webhook_lease_seconds": 0.2,
@@ -232,8 +271,7 @@ async def test_failure_recording_error_keeps_source_message(session_factory, rab
     service.record_delivery_failure = unavailable_once
     monkeypatch.setattr(consumer, "processor", service)
     sender = AsyncMock(side_effect=[WebhookDeliveryError("503"), None])
-    monkeypatch.setattr(consumer.webhook_sender, "send", sender)
-    await consumer.startup()
+    monkeypatch.setattr(consumer.sender, "send", sender)
     await consumer.broker.start()
     try:
         await rabbit.publish(event.model_dump(mode="json"), queue=PAYMENTS_QUEUE, persist=True)

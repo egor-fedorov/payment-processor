@@ -46,13 +46,13 @@ async def rabbit(migrated_database):
     from app.messaging.broker import create_broker
     from app.messaging.topology import DLQ_QUEUE, PAYMENTS_QUEUE, declare_topology, retry_queue
 
-    broker = create_broker()
+    broker = create_broker(get_settings())
     await broker.start()
-    await declare_topology(broker)
+    await declare_topology(broker, get_settings())
     queues = [
         PAYMENTS_QUEUE,
         DLQ_QUEUE,
-        *[retry_queue(i) for i in range(1, get_settings().retry_max_attempts)],
+        *[retry_queue(i, get_settings()) for i in range(1, get_settings().retry_max_attempts)],
     ]
     for queue in queues:
         actual = await broker.declare_queue(queue)

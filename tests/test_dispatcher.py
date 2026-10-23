@@ -3,11 +3,12 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from app.core.config import get_settings
 from app.messaging.dispatcher import OutboxDispatcher
 
 
 async def test_dispatcher_recovers_after_temporary_failure():
-    dispatcher = OutboxDispatcher(AsyncMock(), AsyncMock())
+    dispatcher = OutboxDispatcher(AsyncMock(), AsyncMock(), get_settings())
     dispatcher._poll_interval = 0.001
     stop = asyncio.Event()
 
@@ -32,7 +33,7 @@ async def test_dispatcher_recovers_after_temporary_failure():
 
 
 async def test_dispatcher_cancellation_is_not_swallowed():
-    dispatcher = OutboxDispatcher(AsyncMock(), AsyncMock())
+    dispatcher = OutboxDispatcher(AsyncMock(), AsyncMock(), get_settings())
     dispatcher.dispatch_batch = AsyncMock(side_effect=asyncio.CancelledError)
     with pytest.raises(asyncio.CancelledError):
         await dispatcher.run(asyncio.Event())

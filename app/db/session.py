@@ -1,22 +1,38 @@
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-
-from app.core.config import get_settings
-
-settings = get_settings()
-
-engine = create_async_engine(
-    settings.database_url,
-    pool_pre_ping=True,
+from fastapi import Request
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
 )
-SessionFactory = async_sessionmaker(engine, expire_on_commit=False)
+
+from app.core.config import Settings
 
 
-async def get_session() -> AsyncIterator[AsyncSession]:
-    async with SessionFactory() as session:
+@dataclass(frozen=True)
+class Database:
+    engine: AsyncEngine
+    sessions: async_sessionmaker[AsyncSession]
+
+    async def close(self) -> None:
+        await self.engine.dispose()
+
+
+def create_database(settings: Settings) -> Database:
+    engine = create_async_engine(
+        settings.database_url,
+        pool_pre_ping=True,
+        pool_size=settings.database_pool_size,
+        max_overflow=0,
+        pool_timeout=settings.database_pool_timeout_seconds,
+    )
+    return Database(engine, async_sessionmaker(engine, expire_on_commit=False))
+
+
+async def get_session(request: Request) -> AsyncIterator[AsyncSession]:
+    database: Database = request.app.state.database
+    async with database.sessions() as session:
         yield session
-
-
-async def dispose_engine() -> None:
-    await engine.dispose()

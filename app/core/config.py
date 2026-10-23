@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     api_key: str = Field(default="super-secret-key", min_length=1)
     docs_enabled: bool = False
     database_url: str = "postgresql+asyncpg://payment:payment@postgres:5432/payments"
+    database_pool_size: int = Field(default=10, gt=0)
+    database_pool_timeout_seconds: float = Field(default=5, gt=0, allow_inf_nan=False)
+    consumer_concurrency: int = Field(default=16, gt=0)
     rabbitmq_url: str = "amqp://guest:guest@rabbitmq:5672/"
     outbox_poll_interval_seconds: float = Field(default=1.0, gt=0, allow_inf_nan=False)
     outbox_batch_size: int = Field(default=50, gt=0)

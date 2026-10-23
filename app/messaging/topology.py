@@ -1,6 +1,6 @@
-from faststream.rabbit import RabbitQueue
+from faststream.rabbit import RabbitBroker, RabbitQueue
 
-from app.core.config import get_settings
+from app.core.config import Settings
 
 PAYMENTS_QUEUE_NAME = "payments.new"
 DLQ_QUEUE_NAME = "payments.dlq"
@@ -8,8 +8,7 @@ PAYMENTS_QUEUE = RabbitQueue(PAYMENTS_QUEUE_NAME, durable=True)
 DLQ_QUEUE = RabbitQueue(DLQ_QUEUE_NAME, durable=True)
 
 
-def retry_queue(attempt: int) -> RabbitQueue:
-    settings = get_settings()
+def retry_queue(attempt: int, settings: Settings) -> RabbitQueue:
     delay_ms = settings.retry_base_delay_seconds * 2 ** (attempt - 1) * 1000
     return RabbitQueue(
         f"payments.retry.{delay_ms}ms",
@@ -25,8 +24,8 @@ def retry_queue(attempt: int) -> RabbitQueue:
     )
 
 
-async def declare_topology(broker) -> None:
+async def declare_topology(broker: RabbitBroker, settings: Settings) -> None:
     await broker.declare_queue(PAYMENTS_QUEUE)
     await broker.declare_queue(DLQ_QUEUE)
-    for attempt in range(1, get_settings().retry_max_attempts):
-        await broker.declare_queue(retry_queue(attempt))
+    for attempt in range(1, settings.retry_max_attempts):
+        await broker.declare_queue(retry_queue(attempt, settings))
