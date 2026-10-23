@@ -16,7 +16,7 @@ class PaymentRequestedEvent(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
     webhook_url: AnyHttpUrl
     created_at: datetime
-    delivery_attempt: int = 0
+    delivery_attempt: int = Field(default=0, ge=0)
 
 
 class PaymentWebhookPayload(BaseModel):

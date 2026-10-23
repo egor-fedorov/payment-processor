@@ -29,4 +29,7 @@ test = ["pytest>=8,<10", "pytest-asyncio>=0.24,<2"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-markers = ["integration: requires dedicated PostgreSQL and RabbitMQ test services"]
+markers = [
+    "integration: requires dedicated PostgreSQL and RabbitMQ test services",
+    "containers: restarts the dedicated payment-processor-tests containers",
+]

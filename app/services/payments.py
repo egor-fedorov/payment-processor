@@ -1,8 +1,9 @@
 import asyncio
 import random
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -91,42 +92,77 @@ class PaymentService:
         return await self._session.get(Payment, payment_id)
 
 
+class DeliveryBusyError(Exception):
+    """Another worker owns the lease, or the retry delay has not elapsed."""
+
+
+class DeliveryExhaustedError(Exception):
+    def __init__(self, attempts: int, reason: str) -> None:
+        super().__init__(reason)
+        self.attempts = attempts
+
+
+class DeliveryLeaseLostError(Exception):
+    """The result belongs to an attempt whose lease has been replaced."""
+
+
+@dataclass(frozen=True)
+class WebhookDelivery:
+    payment_id: UUID
+    token: UUID
+    attempt: int
+    url: str
+    payload: PaymentWebhookPayload
+
+
 class PaymentProcessingService:
     def __init__(self, session_factory: async_sessionmaker) -> None:
         self._session_factory = session_factory
         self._settings = get_settings()
 
-    async def prepare_webhook_payload(self, payment_id: UUID) -> PaymentWebhookPayload | None:
+    async def claim_delivery(self, payment_id: UUID) -> WebhookDelivery | None:
         async with self._session_factory() as session:
-            payment = await session.scalar(
-                select(Payment).where(Payment.id == payment_id).with_for_update()
-            )
+            payment = await session.get(Payment, payment_id, with_for_update=True)
             if payment is None:
                 raise PaymentNotFoundError(str(payment_id))
-
-            if payment.webhook_delivered_at is not None:
+            if payment.webhook_delivered_at or payment.webhook_dead_lettered_at:
                 return None
 
+            now = datetime.now(timezone.utc)
+            if payment.webhook_lease_expires_at and payment.webhook_lease_expires_at > now:
+                raise DeliveryBusyError("webhook delivery is already in progress")
+            if payment.webhook_exhausted_at or payment.webhook_attempts >= self._settings.retry_max_attempts:
+                payment.webhook_exhausted_at = payment.webhook_exhausted_at or now
+                payment.last_error = payment.last_error or "delivery lease expired; outcome unknown"
+                payment.webhook_lease_token = None
+                payment.webhook_lease_expires_at = None
+                await session.commit()
+                raise DeliveryExhaustedError(payment.webhook_attempts, payment.last_error)
+            if payment.webhook_next_attempt_at and payment.webhook_next_attempt_at > now:
+                raise DeliveryBusyError("webhook retry delay has not elapsed")
+
             if payment.status == PaymentStatus.PENDING:
-                await asyncio.sleep(
-                    random.uniform(
-                        self._settings.payment_delay_min_seconds,
-                        self._settings.payment_delay_max_seconds,
-                    )
-                )
+                await asyncio.sleep(random.uniform(
+                    self._settings.payment_delay_min_seconds,
+                    self._settings.payment_delay_max_seconds,
+                ))
                 payment.status = (
                     PaymentStatus.SUCCEEDED
-                    if random.random() <= self._settings.payment_success_rate
+                    if random.random() < self._settings.payment_success_rate
                     else PaymentStatus.FAILED
                 )
                 payment.processed_at = datetime.now(timezone.utc)
 
-            await session.commit()
-
-            if payment.processed_at is None:
-                payment.processed_at = datetime.now(timezone.utc)
-
-            return PaymentWebhookPayload(
+            # Reserve and count before HTTP. A crash uses this attempt's budget;
+            # its original unacked RabbitMQ message can recover after expiry.
+            token = uuid4()
+            payment.webhook_attempts += 1
+            payment.webhook_lease_token = token
+            payment.webhook_lease_expires_at = datetime.now(timezone.utc) + timedelta(
+                seconds=self._settings.webhook_lease_seconds
+            )
+            payment.webhook_next_attempt_at = None
+            payload = PaymentWebhookPayload(
                 payment_id=payment.id,
                 status=payment.status,
                 amount=Decimal(payment.amount),
@@ -135,24 +171,49 @@ class PaymentProcessingService:
                 metadata=payment.metadata_json,
                 processed_at=payment.processed_at,
             )
+            await session.commit()
+            return WebhookDelivery(payment.id, token, payment.webhook_attempts, payment.webhook_url, payload)
 
-    async def mark_webhook_delivered(self, payment_id: UUID) -> None:
+    @staticmethod
+    def _check_lease(payment: Payment | None, delivery: WebhookDelivery) -> Payment:
+        if payment is None:
+            raise PaymentNotFoundError(str(delivery.payment_id))
+        if payment.webhook_lease_token != delivery.token:
+            raise DeliveryLeaseLostError(str(delivery.payment_id))
+        return payment
+
+    async def mark_webhook_delivered(self, delivery: WebhookDelivery) -> None:
+        async with self._session_factory() as session:
+            payment = self._check_lease(
+                await session.get(Payment, delivery.payment_id, with_for_update=True), delivery
+            )
+            payment.webhook_delivered_at = datetime.now(timezone.utc)
+            payment.webhook_lease_token = None
+            payment.webhook_lease_expires_at = None
+            payment.last_error = None
+            await session.commit()
+
+    async def record_delivery_failure(self, delivery: WebhookDelivery, error_message: str) -> None:
+        async with self._session_factory() as session:
+            payment = self._check_lease(
+                await session.get(Payment, delivery.payment_id, with_for_update=True), delivery
+            )
+            now = datetime.now(timezone.utc)
+            payment.webhook_lease_token = None
+            payment.webhook_lease_expires_at = None
+            payment.last_error = error_message
+            if payment.webhook_attempts >= self._settings.retry_max_attempts:
+                payment.webhook_exhausted_at = now
+            else:
+                payment.webhook_next_attempt_at = now + timedelta(
+                    seconds=self._settings.retry_base_delay_seconds * 2 ** (payment.webhook_attempts - 1)
+                )
+            await session.commit()
+
+    async def mark_dead_lettered(self, payment_id: UUID) -> None:
         async with self._session_factory() as session:
             payment = await session.get(Payment, payment_id, with_for_update=True)
             if payment is None:
                 raise PaymentNotFoundError(str(payment_id))
-
-            if payment.webhook_delivered_at is None:
-                payment.webhook_delivered_at = datetime.now(timezone.utc)
-            payment.last_error = None
-            await session.commit()
-
-    async def record_delivery_failure(self, payment_id: UUID, error_message: str) -> None:
-        async with self._session_factory() as session:
-            payment = await session.get(Payment, payment_id, with_for_update=True)
-            if payment is None:
-                return
-
-            payment.webhook_attempts += 1
-            payment.last_error = error_message
+            payment.webhook_dead_lettered_at = datetime.now(timezone.utc)
             await session.commit()

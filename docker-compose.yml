@@ -17,8 +17,11 @@ services:
 
   rabbitmq:
     image: rabbitmq:3.13-management
+    hostname: payment-rabbitmq
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
     healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      test: ["CMD-SHELL", "rabbitmq-diagnostics -q check_running && rabbitmq-diagnostics -q check_port_connectivity"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -40,6 +43,8 @@ services:
       RETRY_MAX_ATTEMPTS: ${RETRY_MAX_ATTEMPTS:-3}
       RETRY_BASE_DELAY_SECONDS: ${RETRY_BASE_DELAY_SECONDS:-1}
       WEBHOOK_TIMEOUT_SECONDS: ${WEBHOOK_TIMEOUT_SECONDS:-5}
+      WEBHOOK_LEASE_SECONDS: ${WEBHOOK_LEASE_SECONDS:-30}
+      DOCS_ENABLED: ${DOCS_ENABLED:-false}
     depends_on:
       postgres:
         condition: service_healthy
@@ -73,3 +78,4 @@ services:
 
 volumes:
   postgres_data:
+  rabbitmq_data:

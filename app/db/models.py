@@ -51,6 +51,11 @@ class Payment(Base):
     )
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     webhook_delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    webhook_lease_token: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    webhook_lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    webhook_next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    webhook_exhausted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    webhook_dead_lettered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     webhook_attempts: Mapped[int] = mapped_column(
         nullable=False,
         default=0,

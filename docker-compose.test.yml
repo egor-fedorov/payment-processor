@@ -1,0 +1,30 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: payment_test
+      POSTGRES_PASSWORD: payment_test
+      POSTGRES_DB: payment_test
+    ports:
+      - "127.0.0.1:15433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U payment_test -d payment_test"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    hostname: payment-test-rabbitmq
+    ports:
+      - "127.0.0.1:15673:5672"
+    volumes:
+      - rabbitmq_test_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD-SHELL", "rabbitmq-diagnostics -q check_running && rabbitmq-diagnostics -q check_port_connectivity"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+volumes:
+  rabbitmq_test_data:
