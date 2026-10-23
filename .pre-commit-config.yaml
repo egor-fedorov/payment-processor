@@ -17,3 +17,9 @@ repos:
         language: system
         pass_filenames: false
         types_or: [python, pyi]
+      - id: architecture
+        name: Module boundaries and dependency cycles
+        entry: uv run --locked lint-imports
+        language: system
+        pass_filenames: false
+        files: (\.pyi?$|^pyproject\.toml$)

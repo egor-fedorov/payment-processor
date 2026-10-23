@@ -25,7 +25,13 @@ include = ["app*"]
 
 [dependency-groups]
 test = ["pytest>=8,<10", "pytest-asyncio>=0.24,<2", "pytest-cov>=6,<8"]
-dev = [{include-group = "test"}, "ruff>=0.14,<1", "mypy>=1.18,<2", "pre-commit>=4,<5"]
+dev = [
+    {include-group = "test"},
+    "ruff>=0.14,<1",
+    "mypy>=1.18,<2",
+    "pre-commit>=4,<5",
+    "import-linter>=2.15,<3",
+]
 
 [tool.uv]
 required-version = "==0.13.5"
@@ -52,6 +58,50 @@ extend-immutable-calls = ["fastapi.Depends", "fastapi.Header"]
 python_version = "3.14"
 strict = true
 files = ["app"]
+
+[tool.importlinter]
+root_package = "app"
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "Domain, contracts and ports are independent of infrastructure"
+type = "forbidden"
+source_modules = ["app.domain", "app.contracts", "app.ports"]
+forbidden_modules = [
+    "app.api", "app.db", "app.messaging", "app.services", "app.core",
+    "app.main", "app.consumer", "app.dispatcher",
+    "fastapi", "starlette", "faststream", "sqlalchemy", "httpx",
+    "asyncpg", "psycopg", "aio_pika",
+]
+
+[[tool.importlinter.contracts]]
+name = "Persistence is independent of HTTP and AMQP"
+type = "forbidden"
+source_modules = ["app.db"]
+forbidden_modules = [
+    "app.api", "app.messaging", "app.services",
+    "fastapi", "starlette", "faststream", "httpx", "aio_pika",
+]
+
+[[tool.importlinter.contracts]]
+name = "Payment use cases depend on effect ports, not transport adapters"
+type = "forbidden"
+source_modules = ["app.services.payments", "app.services.rejections"]
+forbidden_modules = [
+    "app.api", "app.messaging", "app.services.gateway", "app.services.webhook",
+    "fastapi", "starlette", "faststream", "httpx", "aio_pika",
+]
+
+[[tool.importlinter.contracts]]
+name = "Outbox dispatching is independent of persistence and broker implementations"
+type = "forbidden"
+source_modules = ["app.messaging.dispatcher"]
+forbidden_modules = ["app.db", "sqlalchemy", "faststream", "aio_pika"]
+
+[[tool.importlinter.contracts]]
+name = "Application packages and modules have no dependency cycles"
+type = "acyclic_siblings"
+ancestors = ["app"]
 
 [tool.coverage.run]
 branch = true
