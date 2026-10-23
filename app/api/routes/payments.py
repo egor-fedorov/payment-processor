@@ -24,7 +24,9 @@ router = APIRouter(
 async def create_payment(
     payload: PaymentCreateRequest,
     session: AsyncSession = Depends(get_session),
-    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    idempotency_key: str = Header(
+        ..., alias="Idempotency-Key", min_length=1, max_length=255, pattern=r"\S"
+    ),
 ) -> PaymentAcceptedResponse:
     payment = await PaymentService(session).create_payment(payload, idempotency_key)
     return PaymentAcceptedResponse.from_payment(payment)

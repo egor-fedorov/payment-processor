@@ -42,5 +42,11 @@ async def lifespan(app: FastAPI):
         await dispose_engine()
 
 
-app = FastAPI(title=settings.app_name, lifespan=lifespan)
+app = FastAPI(
+    title=settings.app_name,
+    lifespan=lifespan,
+    docs_url="/docs" if settings.docs_enabled else None,
+    redoc_url="/redoc" if settings.docs_enabled else None,
+    openapi_url="/openapi.json" if settings.docs_enabled else None,
+)
 app.include_router(payments_router, prefix=settings.api_v1_prefix)

@@ -40,32 +40,40 @@ class PaymentService:
             webhook_url=str(payload.webhook_url),
             idempotency_key=idempotency_key,
         )
-        self._session.add(payment)
-        await self._session.flush()
-
-        event = PaymentRequestedEvent(
-            payment_id=payment.id,
-            amount=payload.amount,
-            currency=payload.currency,
-            description=payload.description,
-            metadata=payload.metadata,
-            webhook_url=payload.webhook_url,
-            created_at=payment.created_at or datetime.now(timezone.utc),
-        )
-        self._session.add(
-            OutboxMessage(
-                aggregate_type="payment",
-                aggregate_id=payment.id,
-                event_type="payments.requested",
-                payload=event.model_dump(mode="json"),
-                headers={"idempotency_key": idempotency_key},
-            )
-        )
-
         try:
+            self._session.add(payment)
+            await self._session.flush()
+            event = PaymentRequestedEvent(
+                payment_id=payment.id,
+                amount=payload.amount,
+                currency=payload.currency,
+                description=payload.description,
+                metadata=payload.metadata,
+                webhook_url=payload.webhook_url,
+                created_at=payment.created_at,
+            )
+            self._session.add(
+                OutboxMessage(
+                    aggregate_type="payment",
+                    aggregate_id=payment.id,
+                    event_type="payments.requested",
+                    payload=event.model_dump(mode="json"),
+                    headers={"idempotency_key": idempotency_key},
+                )
+            )
             await self._session.commit()
-        except IntegrityError:
+        except IntegrityError as exc:
             await self._session.rollback()
+            # asyncpg keeps the PostgreSQL constraint name on the cause;
+            # psycopg exposes it through diag. Do not hide other constraints.
+            original = exc.orig
+            cause = getattr(original, "__cause__", None)
+            constraint = (
+                getattr(cause, "constraint_name", None)
+                or getattr(getattr(original, "diag", None), "constraint_name", None)
+            )
+            if constraint != "uq_payments_idempotency_key":
+                raise
             existing = await self.get_by_idempotency_key(idempotency_key)
             if existing is None:
                 raise
