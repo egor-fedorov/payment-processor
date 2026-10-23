@@ -1,0 +1,15 @@
+services:
+  receiver:
+    image: payment-processor:local
+    init: true
+    command: ["uvicorn", "benchmarks.receiver:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]
+    working_dir: /srv
+    volumes:
+      - ./benchmarks:/srv/benchmarks:ro
+    ports:
+      - "127.0.0.1:${RECEIVER_PORT:-18081}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/live', timeout=2)"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
