@@ -1,5 +1,6 @@
 COMPOSE := docker compose
-PYTHON := python3
+UV := uv
+PYTHON := $(UV) run --locked python
 TEST_COMPOSE := $(COMPOSE) -p payment-processor-tests -f docker-compose.test.yml
 
 .PHONY: help up down restart build logs ps clean \
@@ -56,8 +57,7 @@ shell-postgres:
 	$(COMPOSE) exec postgres psql -U payment -d payments
 
 install:
-	$(PYTHON) -m pip install --upgrade pip
-	$(PYTHON) -m pip install .
+	$(UV) sync --locked
 
 compile:
 	$(PYTHON) -m compileall app alembic

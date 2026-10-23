@@ -7,3 +7,11 @@ __pycache__/
 *.pyc
 .env
 task.pdf
+document.pdf
+.codex
+.agents/
+tests/
+benchmarks/
+reports/
+.coverage*
+.env.*
