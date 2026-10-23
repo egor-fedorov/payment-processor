@@ -1,5 +1,7 @@
 import asyncio
 import logging
+from collections.abc import AsyncIterator
+from contextlib import AsyncExitStack, asynccontextmanager
 from time import perf_counter
 
 import httpx
@@ -103,19 +105,22 @@ def create_worker(settings: Settings) -> FastStream:
         WebhookSender(client, settings.webhook_timeout_seconds),
         settings,
     )
-    worker = FastStream(broker)
+
+    @asynccontextmanager
+    async def lifespan() -> AsyncIterator[None]:
+        async with AsyncExitStack() as resources:
+            resources.push_async_callback(database.close)
+            resources.push_async_callback(client.aclose)
+            # FastStream stops the broker normally; this also covers partial startup.
+            resources.push_async_callback(broker.stop)
+            yield
+
+    worker = FastStream(broker, lifespan=lifespan)
 
     @worker.on_startup
     async def startup() -> None:
         await broker.connect()
         await declare_topology(broker)
-
-    @worker.after_shutdown
-    async def shutdown() -> None:
-        try:
-            await client.aclose()
-        finally:
-            await database.close()
 
     return worker
 

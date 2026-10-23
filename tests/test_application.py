@@ -86,8 +86,9 @@ async def test_applications_have_independent_settings(settings):
 @pytest.mark.integration
 async def test_worker_factory_lifecycle(settings, migrated_database, rabbit):
     worker = create_worker(settings)
-    await worker.start()
-    await worker.stop()
+    async with worker.lifespan_context():
+        await worker.start()
+        await worker.stop()
 
 
 @pytest.mark.integration
@@ -95,3 +96,46 @@ async def test_dispatcher_process_lifecycle(settings, migrated_database, rabbit)
     stop = asyncio.Event()
     stop.set()
     await run(settings, stop)
+
+
+@pytest.mark.parametrize("failure", ["connect", "topology", "cancel", "stop"])
+async def test_worker_releases_resources_on_all_exit_paths(settings, monkeypatch, failure):
+    from types import SimpleNamespace
+
+    from app.messaging.broker import create_broker
+
+    database = SimpleNamespace(sessions=AsyncMock(), close=AsyncMock())
+    client = AsyncMock()
+    broker = create_broker(settings)
+    started = asyncio.Event()
+    monkeypatch.setattr("app.consumer.create_database", lambda _: database)
+    monkeypatch.setattr("app.consumer.create_broker", lambda _: broker)
+    monkeypatch.setattr("app.consumer.httpx.AsyncClient", lambda **_: client)
+    monkeypatch.setattr(
+        broker,
+        "connect",
+        AsyncMock(side_effect=ConnectionError("connect") if failure == "connect" else None),
+    )
+    monkeypatch.setattr(
+        "app.consumer.declare_topology",
+        AsyncMock(side_effect=ConnectionError("topology") if failure == "topology" else None),
+    )
+    monkeypatch.setattr(broker, "start", AsyncMock(side_effect=lambda: started.set()))
+    monkeypatch.setattr(broker, "stop", AsyncMock())
+    worker = create_worker(settings)
+    if failure in {"connect", "topology"}:
+        with pytest.raises(ConnectionError, match=failure):
+            await worker.run()
+    else:
+        task = asyncio.create_task(worker.run())
+        await asyncio.wait_for(started.wait(), 1)
+        if failure == "cancel":
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        else:
+            worker.exit()
+            await asyncio.wait_for(task, 1)
+    client.aclose.assert_awaited_once()
+    database.close.assert_awaited_once()
+    broker.stop.assert_awaited()

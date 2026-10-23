@@ -52,7 +52,9 @@ class OutboxDispatcher:
 
     async def dispatch_batch(self) -> int:
         items = await self._repository.claim(self._clock.now())
-        results = await asyncio.gather(*(self._publish(item) for item in items))
+        async with asyncio.TaskGroup() as group:
+            tasks = [group.create_task(self._publish(item)) for item in items]
+        results = [task.result() for task in tasks]
         if all(results):
             self.last_error = None
         return sum(results)
