@@ -13,7 +13,6 @@ from app.messaging.dispatcher import OutboxDispatcher
 from app.messaging.topology import PAYMENTS_QUEUE
 from app.services.payments import PaymentService
 
-
 pytestmark = [
     pytest.mark.integration,
     pytest.mark.containers,
@@ -23,15 +22,22 @@ pytestmark = [
 
 async def compose(*args):
     process = await asyncio.create_subprocess_exec(
-        "docker", "compose", "-p", "payment-processor-tests", "-f", "docker-compose.test.yml", *args,
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+        "docker",
+        "compose",
+        "-p",
+        "payment-processor-tests",
+        "-f",
+        "docker-compose.test.yml",
+        *args,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
     )
     output, _ = await process.communicate()
     assert process.returncode == 0, output.decode()
 
 
-async def wait_until(check, timeout=30):
-    deadline = monotonic() + timeout
+async def wait_until(check, deadline_seconds=30):
+    deadline = monotonic() + deadline_seconds
     while monotonic() < deadline:
         if await check():
             return
@@ -58,15 +64,22 @@ async def test_rabbitmq_recreation_keeps_persistent_messages(rabbit):
 @pytest.mark.parametrize("service", ["postgres", "rabbitmq"])
 async def test_dispatcher_recovers_after_dependency_restart(service, session_factory, rabbit):
     async with session_factory() as session:
-        await PaymentService(session).create_payment(PaymentCreateRequest(
-            amount="1.00", currency="EUR", description="recovery", webhook_url="https://example.com/hook",
-        ), "recovery")
+        await PaymentService(session).create_payment(
+            PaymentCreateRequest(
+                amount="1.00",
+                currency="EUR",
+                description="recovery",
+                webhook_url="https://example.com/hook",
+            ),
+            "recovery",
+        )
     dispatcher = OutboxDispatcher(session_factory, rabbit)
     dispatcher._poll_interval = 0.1
     stop = asyncio.Event()
     await compose("stop", service)
     task = asyncio.create_task(dispatcher.run(stop))
     try:
+
         async def failed():
             return dispatcher.last_error is not None
 

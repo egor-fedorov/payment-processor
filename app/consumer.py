@@ -1,7 +1,7 @@
 import asyncio
 import base64
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from faststream import AckPolicy, FastStream
 from pydantic import ValidationError
@@ -19,7 +19,6 @@ from app.services.payments import (
 )
 from app.services.webhook import WebhookDeliveryError, WebhookSender
 
-
 logger = logging.getLogger(__name__)
 settings = get_settings()
 broker = create_broker()
@@ -30,7 +29,8 @@ webhook_sender = WebhookSender(settings.webhook_timeout_seconds)
 
 # Keep decoding inside the handler so invalid JSON also reaches the DLQ.
 @broker.subscriber(
-    PAYMENTS_QUEUE, ack_policy=AckPolicy.NACK_ON_ERROR,
+    PAYMENTS_QUEUE,
+    ack_policy=AckPolicy.NACK_ON_ERROR,
     decoder=lambda message: message.body,
 )
 async def consume_payment(body: bytes) -> None:
@@ -41,10 +41,13 @@ async def consume_payment(body: bytes) -> None:
             await broker.publish(
                 {
                     "failure_reason": str(exc),
-                    "failed_at": datetime.now(timezone.utc).isoformat(),
+                    "failed_at": datetime.now(UTC).isoformat(),
                     "original_body_base64": base64.b64encode(body).decode("ascii"),
                 },
-                queue=DLQ_QUEUE, persist=True, mandatory=True, timeout=10,
+                queue=DLQ_QUEUE,
+                persist=True,
+                mandatory=True,
+                timeout=10,
             )
             return
         await process_event(event)
@@ -98,13 +101,15 @@ async def publish_dead_letter(event: PaymentRequestedEvent, attempt: int, reason
             payment_id=event.payment_id,
             delivery_attempt=attempt,
             failure_reason=reason,
-            failed_at=datetime.now(timezone.utc),
+            failed_at=datetime.now(UTC),
             original_event=event,
         ).model_dump(mode="json"),
         queue=DLQ_QUEUE,
         correlation_id=str(event.payment_id),
         message_id=f"{event.payment_id}:dlq",
-        persist=True, mandatory=True, timeout=10,
+        persist=True,
+        mandatory=True,
+        timeout=10,
     )
 
 
@@ -116,7 +121,9 @@ async def retry_or_dead_letter(event: PaymentRequestedEvent, attempt: int, reaso
             queue=retry_queue(attempt),
             correlation_id=str(event.payment_id),
             message_id=f"{event.payment_id}:retry:{attempt}",
-            persist=True, mandatory=True, timeout=10,
+            persist=True,
+            mandatory=True,
+            timeout=10,
         )
     else:
         await publish_dead_letter(event, attempt, reason)

@@ -1,13 +1,13 @@
-from enum import Enum
+from enum import StrEnum
 
 
-class Currency(str, Enum):
+class Currency(StrEnum):
     RUB = "RUB"
     USD = "USD"
     EUR = "EUR"
 
 
-class PaymentStatus(str, Enum):
+class PaymentStatus(StrEnum):
     PENDING = "pending"
     SUCCEEDED = "succeeded"
     FAILED = "failed"

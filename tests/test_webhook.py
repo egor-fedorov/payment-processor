@@ -27,6 +27,10 @@ async def test_total_timeout_bounds_slow_http_operation(monkeypatch):
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     monkeypatch.setattr("app.services.webhook.httpx.AsyncClient", lambda **_: client)
     with pytest.raises(WebhookDeliveryError, match="total webhook timeout"):
-        await asyncio.wait_for(WebhookSender(0.01).send(
-            "https://example.com/hook", {"payment_id": "payment-123"},
-        ), timeout=1)
+        await asyncio.wait_for(
+            WebhookSender(0.01).send(
+                "https://example.com/hook",
+                {"payment_id": "payment-123"},
+            ),
+            timeout=1,
+        )

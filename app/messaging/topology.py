@@ -2,7 +2,6 @@ from faststream.rabbit import RabbitQueue
 
 from app.core.config import get_settings
 
-
 PAYMENTS_QUEUE_NAME = "payments.new"
 DLQ_QUEUE_NAME = "payments.dlq"
 PAYMENTS_QUEUE = RabbitQueue(PAYMENTS_QUEUE_NAME, durable=True)

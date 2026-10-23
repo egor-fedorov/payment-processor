@@ -1,7 +1,7 @@
 import asyncio
 import random
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from uuid import UUID, uuid4
 
@@ -69,9 +69,8 @@ class PaymentService:
             # psycopg exposes it through diag. Do not hide other constraints.
             original = exc.orig
             cause = getattr(original, "__cause__", None)
-            constraint = (
-                getattr(cause, "constraint_name", None)
-                or getattr(getattr(original, "diag", None), "constraint_name", None)
+            constraint = getattr(cause, "constraint_name", None) or getattr(
+                getattr(original, "diag", None), "constraint_name", None
             )
             if constraint != "uq_payments_idempotency_key":
                 raise
@@ -128,10 +127,13 @@ class PaymentProcessingService:
             if payment.webhook_delivered_at or payment.webhook_dead_lettered_at:
                 return None
 
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             if payment.webhook_lease_expires_at and payment.webhook_lease_expires_at > now:
                 raise DeliveryBusyError("webhook delivery is already in progress")
-            if payment.webhook_exhausted_at or payment.webhook_attempts >= self._settings.retry_max_attempts:
+            if (
+                payment.webhook_exhausted_at
+                or payment.webhook_attempts >= self._settings.retry_max_attempts
+            ):
                 payment.webhook_exhausted_at = payment.webhook_exhausted_at or now
                 payment.last_error = payment.last_error or "delivery lease expired; outcome unknown"
                 payment.webhook_lease_token = None
@@ -142,23 +144,25 @@ class PaymentProcessingService:
                 raise DeliveryBusyError("webhook retry delay has not elapsed")
 
             if payment.status == PaymentStatus.PENDING:
-                await asyncio.sleep(random.uniform(
-                    self._settings.payment_delay_min_seconds,
-                    self._settings.payment_delay_max_seconds,
-                ))
+                await asyncio.sleep(
+                    random.uniform(
+                        self._settings.payment_delay_min_seconds,
+                        self._settings.payment_delay_max_seconds,
+                    )
+                )
                 payment.status = (
                     PaymentStatus.SUCCEEDED
                     if random.random() < self._settings.payment_success_rate
                     else PaymentStatus.FAILED
                 )
-                payment.processed_at = datetime.now(timezone.utc)
+                payment.processed_at = datetime.now(UTC)
 
             # Reserve and count before HTTP. A crash uses this attempt's budget;
             # its original unacked RabbitMQ message can recover after expiry.
             token = uuid4()
             payment.webhook_attempts += 1
             payment.webhook_lease_token = token
-            payment.webhook_lease_expires_at = datetime.now(timezone.utc) + timedelta(
+            payment.webhook_lease_expires_at = datetime.now(UTC) + timedelta(
                 seconds=self._settings.webhook_lease_seconds
             )
             payment.webhook_next_attempt_at = None
@@ -172,7 +176,9 @@ class PaymentProcessingService:
                 processed_at=payment.processed_at,
             )
             await session.commit()
-            return WebhookDelivery(payment.id, token, payment.webhook_attempts, payment.webhook_url, payload)
+            return WebhookDelivery(
+                payment.id, token, payment.webhook_attempts, payment.webhook_url, payload
+            )
 
     @staticmethod
     def _check_lease(payment: Payment | None, delivery: WebhookDelivery) -> Payment:
@@ -187,7 +193,7 @@ class PaymentProcessingService:
             payment = self._check_lease(
                 await session.get(Payment, delivery.payment_id, with_for_update=True), delivery
             )
-            payment.webhook_delivered_at = datetime.now(timezone.utc)
+            payment.webhook_delivered_at = datetime.now(UTC)
             payment.webhook_lease_token = None
             payment.webhook_lease_expires_at = None
             payment.last_error = None
@@ -198,7 +204,7 @@ class PaymentProcessingService:
             payment = self._check_lease(
                 await session.get(Payment, delivery.payment_id, with_for_update=True), delivery
             )
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             payment.webhook_lease_token = None
             payment.webhook_lease_expires_at = None
             payment.last_error = error_message
@@ -206,7 +212,8 @@ class PaymentProcessingService:
                 payment.webhook_exhausted_at = now
             else:
                 payment.webhook_next_attempt_at = now + timedelta(
-                    seconds=self._settings.retry_base_delay_seconds * 2 ** (payment.webhook_attempts - 1)
+                    seconds=self._settings.retry_base_delay_seconds
+                    * 2 ** (payment.webhook_attempts - 1)
                 )
             await session.commit()
 
@@ -215,5 +222,5 @@ class PaymentProcessingService:
             payment = await session.get(Payment, payment_id, with_for_update=True)
             if payment is None:
                 raise PaymentNotFoundError(str(payment_id))
-            payment.webhook_dead_lettered_at = datetime.now(timezone.utc)
+            payment.webhook_dead_lettered_at = datetime.now(UTC)
             await session.commit()

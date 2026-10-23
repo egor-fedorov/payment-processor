@@ -15,12 +15,11 @@ from app.messaging.topology import DLQ_QUEUE, PAYMENTS_QUEUE, retry_queue
 from app.services.payments import PaymentProcessingService, PaymentService
 from app.services.webhook import WebhookDeliveryError
 
-
 pytestmark = pytest.mark.integration
 
 
-async def eventually(check, timeout=15):
-    deadline = monotonic() + timeout
+async def eventually(check, deadline_seconds=15):
+    deadline = monotonic() + deadline_seconds
     while monotonic() < deadline:
         result = await check()
         if result:
@@ -31,10 +30,18 @@ async def eventually(check, timeout=15):
 
 async def payment_event(session_factory):
     async with session_factory() as session:
-        await PaymentService(session).create_payment(PaymentCreateRequest(
-            amount="1.00", currency="USD", description="test", webhook_url="http://example.com/hook",
-        ), str(uuid4()))
-        return PaymentRequestedEvent.model_validate(await session.scalar(select(OutboxMessage.payload)))
+        await PaymentService(session).create_payment(
+            PaymentCreateRequest(
+                amount="1.00",
+                currency="USD",
+                description="test",
+                webhook_url="http://example.com/hook",
+            ),
+            str(uuid4()),
+        )
+        return PaymentRequestedEvent.model_validate(
+            await session.scalar(select(OutboxMessage.payload))
+        )
 
 
 async def receive(broker, queue):
@@ -70,8 +77,11 @@ async def test_retry_queues_do_not_block_shorter_delay(rabbit):
     await second.ack()
 
 
-async def test_consumer_retries_then_dlq_and_ignores_duplicate(session_factory, rabbit, monkeypatch):
+async def test_consumer_retries_then_dlq_and_ignores_duplicate(
+    session_factory, rabbit, monkeypatch
+):
     import app.consumer as consumer
+
     event = await payment_event(session_factory)
     attempts = []
 
@@ -107,6 +117,7 @@ async def test_consumer_retries_then_dlq_and_ignores_duplicate(session_factory, 
 
 async def test_transient_database_error_requeues_message(session_factory, rabbit, monkeypatch):
     import app.consumer as consumer
+
     event = await payment_event(session_factory)
     service = PaymentProcessingService(session_factory)
     claim = service.claim_delivery
@@ -141,10 +152,13 @@ async def test_transient_database_error_requeues_message(session_factory, rabbit
 
 async def test_invalid_json_is_sent_to_dlq(rabbit):
     import app.consumer as consumer
+
     await consumer.startup()
     await consumer.broker.start()
     try:
-        await rabbit.publish(b"not json", queue=PAYMENTS_QUEUE, content_type="application/json", persist=True)
+        await rabbit.publish(
+            b"not json", queue=PAYMENTS_QUEUE, content_type="application/json", persist=True
+        )
         dlq = await eventually(lambda: receive(rabbit, DLQ_QUEUE))
         payload = json.loads(dlq.body)
         assert payload["original_body_base64"] == "bm90IGpzb24="
@@ -156,9 +170,13 @@ async def test_invalid_json_is_sent_to_dlq(rabbit):
 
 @pytest.mark.parametrize("destination", ["retry", "dlq"])
 async def test_failed_republish_is_requeued_without_resetting_attempts(
-    destination, session_factory, rabbit, monkeypatch,
+    destination,
+    session_factory,
+    rabbit,
+    monkeypatch,
 ):
     import app.consumer as consumer
+
     event = await payment_event(session_factory)
     service = PaymentProcessingService(session_factory)
     if destination == "dlq":
@@ -192,11 +210,15 @@ async def test_failed_republish_is_requeued_without_resetting_attempts(
 
 async def test_failure_recording_error_keeps_source_message(session_factory, rabbit, monkeypatch):
     import app.consumer as consumer
+
     event = await payment_event(session_factory)
     service = PaymentProcessingService(session_factory)
-    service._settings = service._settings.model_copy(update={
-        "webhook_lease_seconds": 0.2, "webhook_timeout_seconds": 0.1,
-    })
+    service._settings = service._settings.model_copy(
+        update={
+            "webhook_lease_seconds": 0.2,
+            "webhook_timeout_seconds": 0.1,
+        }
+    )
     record = service.record_delivery_failure
     calls = 0
 

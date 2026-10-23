@@ -72,9 +72,7 @@ class Payment(Base):
 
 class OutboxMessage(Base):
     __tablename__ = "outbox"
-    __table_args__ = (
-        Index("ix_outbox_published_at_created_at", "published_at", "created_at"),
-    )
+    __table_args__ = (Index("ix_outbox_published_at_created_at", "published_at", "created_at"),)
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),

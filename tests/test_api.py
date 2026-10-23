@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -12,7 +12,6 @@ from app.core.config import Settings, get_settings
 from app.db.session import get_session
 from app.main import app
 from app.services.payments import PaymentService
-
 
 PAYLOAD = {
     "amount": "10.00",
@@ -29,9 +28,12 @@ async def test_invalid_idempotency_key(key):
 
     app.dependency_overrides[get_session] = session
     try:
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
             response = await client.post(
-                "/api/v1/payments", json=PAYLOAD,
+                "/api/v1/payments",
+                json=PAYLOAD,
                 headers={"X-API-Key": get_settings().api_key, "Idempotency-Key": key},
             )
         assert response.status_code == 422
@@ -47,7 +49,7 @@ async def test_flush_conflict_returns_existing_payment():
     original = Exception("unique violation")
     original.__cause__ = cause
     session.flush.side_effect = IntegrityError("insert", {}, original)
-    existing = SimpleNamespace(id=uuid4(), created_at=datetime.now(timezone.utc))
+    existing = SimpleNamespace(id=uuid4(), created_at=datetime.now(UTC))
     session.scalar.side_effect = [None, existing]
     result = await PaymentService(session).create_payment(PaymentCreateRequest(**PAYLOAD), "key")
     assert result is existing
@@ -68,17 +70,24 @@ async def test_unrelated_integrity_error_is_not_hidden():
 
 @pytest.mark.parametrize("path", ["/docs", "/redoc", "/openapi.json"])
 async def test_documentation_is_disabled_by_default(path):
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
         assert (await client.get(path)).status_code == 404
 
 
-@pytest.mark.parametrize("values", [
-    {"outbox_batch_size": 0}, {"payment_success_rate": 1.1},
-    {"retry_max_attempts": 0}, {"retry_base_delay_seconds": 0},
-    {"payment_delay_min_seconds": 5, "payment_delay_max_seconds": 2},
-    {"webhook_timeout_seconds": 30, "webhook_lease_seconds": 5},
-    {"outbox_poll_interval_seconds": float("inf")},
-])
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"outbox_batch_size": 0},
+        {"payment_success_rate": 1.1},
+        {"retry_max_attempts": 0},
+        {"retry_base_delay_seconds": 0},
+        {"payment_delay_min_seconds": 5, "payment_delay_max_seconds": 2},
+        {"webhook_timeout_seconds": 30, "webhook_lease_seconds": 5},
+        {"outbox_poll_interval_seconds": float("inf")},
+    ],
+)
 def test_invalid_settings_fail_at_startup(values):
     with pytest.raises(ValueError):
         Settings(_env_file=None, **values)

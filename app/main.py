@@ -12,7 +12,6 @@ from app.messaging.broker import create_broker
 from app.messaging.dispatcher import OutboxDispatcher
 from app.messaging.topology import declare_topology
 
-
 settings = get_settings()
 logger = logging.getLogger(__name__)
 
@@ -37,7 +36,7 @@ async def lifespan(app: FastAPI):
             if dispatcher_task is not None:
                 try:
                     await asyncio.wait_for(dispatcher_task, timeout=5)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     dispatcher_task.cancel()
                     with suppress(asyncio.CancelledError):
                         await dispatcher_task

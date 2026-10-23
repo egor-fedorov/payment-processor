@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     webhook_lease_seconds: float = Field(default=30.0, gt=0, allow_inf_nan=False)
 
     @model_validator(mode="after")
-    def validate_intervals(self) -> "Settings":
+    def validate_intervals(self) -> Settings:
         if self.payment_delay_min_seconds > self.payment_delay_max_seconds:
             raise ValueError("payment delay minimum must not exceed maximum")
         if self.webhook_lease_seconds <= self.webhook_timeout_seconds:

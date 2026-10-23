@@ -9,6 +9,8 @@ def create_broker() -> RabbitBroker:
     return RabbitBroker(
         settings.rabbitmq_url,
         default_channel=Channel(
-            prefetch_count=1, publisher_confirms=True, on_return_raises=True,
+            prefetch_count=1,
+            publisher_confirms=True,
+            on_return_raises=True,
         ),
     )

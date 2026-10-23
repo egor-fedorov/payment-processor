@@ -12,7 +12,6 @@ from app.api.schemas import (
 from app.db.session import get_session
 from app.services.payments import PaymentService
 
-
 router = APIRouter(
     prefix="/payments",
     tags=["payments"],

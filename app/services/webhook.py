@@ -16,11 +16,12 @@ class WebhookSender:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
                 response = await asyncio.wait_for(
                     client.post(
-                        url, json=payload,
+                        url,
+                        json=payload,
                         headers={"X-Webhook-ID": str(payload["payment_id"])},
                     ),
                     timeout=self._timeout,
                 )
                 response.raise_for_status()
-        except (httpx.HTTPError, asyncio.TimeoutError) as exc:
+        except (TimeoutError, httpx.HTTPError) as exc:
             raise WebhookDeliveryError(str(exc) or "total webhook timeout exceeded") from exc

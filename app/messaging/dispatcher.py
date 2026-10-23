@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -8,7 +8,6 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from app.core.config import get_settings
 from app.db.models import OutboxMessage
 from app.messaging.topology import PAYMENTS_QUEUE
-
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +40,7 @@ class OutboxDispatcher:
 
             try:
                 await asyncio.wait_for(stop_event.wait(), timeout=delay)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 continue
 
     async def dispatch_batch(self) -> int:
@@ -88,6 +87,6 @@ class OutboxDispatcher:
                 ),
                 timeout=10,
             )
-            message.published_at = datetime.now(timezone.utc)
+            message.published_at = datetime.now(UTC)
             await session.commit()
             return True

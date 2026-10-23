@@ -2,7 +2,6 @@ from sqlalchemy import MetaData
 from sqlalchemy.ext.asyncio import AsyncAttrs
 from sqlalchemy.orm import DeclarativeBase
 
-
 metadata = MetaData(
     naming_convention={
         "ix": "ix_%(table_name)s_%(column_0_name)s",

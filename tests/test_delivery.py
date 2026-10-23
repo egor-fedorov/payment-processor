@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
 import pytest
@@ -8,13 +8,17 @@ from sqlalchemy import func, select, update
 from app.api.schemas import PaymentCreateRequest
 from app.db.models import OutboxMessage, Payment
 from app.services.payments import (
-    DeliveryBusyError, DeliveryExhaustedError, DeliveryLeaseLostError,
-    PaymentProcessingService, PaymentService,
+    DeliveryBusyError,
+    DeliveryExhaustedError,
+    DeliveryLeaseLostError,
+    PaymentProcessingService,
+    PaymentService,
 )
 
-
 pytestmark = pytest.mark.integration
-PAYLOAD = PaymentCreateRequest(amount="10.00", currency="RUB", description="order", webhook_url="https://example.com/hook")
+PAYLOAD = PaymentCreateRequest(
+    amount="10.00", currency="RUB", description="order", webhook_url="https://example.com/hook"
+)
 
 
 async def create(session_factory, key="key"):
@@ -34,7 +38,9 @@ async def test_concurrent_claim_and_duplicate_after_success(session_factory):
     payment = await create(session_factory)
     service = PaymentProcessingService(session_factory)
     results = await asyncio.gather(
-        service.claim_delivery(payment.id), service.claim_delivery(payment.id), return_exceptions=True,
+        service.claim_delivery(payment.id),
+        service.claim_delivery(payment.id),
+        return_exceptions=True,
     )
     assert sum(isinstance(result, DeliveryBusyError) for result in results) == 1
     delivery = next(result for result in results if not isinstance(result, Exception))
@@ -54,7 +60,7 @@ async def test_three_attempts_then_terminal_state(session_factory):
         if status is None:
             status, processed_at = delivery.payload.status, delivery.payload.processed_at
         assert (delivery.payload.status, delivery.payload.processed_at) == (status, processed_at)
-        before = datetime.now(timezone.utc)
+        before = datetime.now(UTC)
         await service.record_delivery_failure(delivery, "HTTP 503")
         if attempt < 3:
             with pytest.raises(DeliveryBusyError):
@@ -76,9 +82,13 @@ async def test_crashed_worker_lease_recovers_and_fences_old_result(session_facto
     service = PaymentProcessingService(session_factory)
     old = await service.claim_delivery(payment.id)
     async with session_factory() as session:
-        await session.execute(update(Payment).where(Payment.id == payment.id).values(
-            webhook_lease_expires_at=datetime.now(timezone.utc) - timedelta(seconds=1),
-        ))
+        await session.execute(
+            update(Payment)
+            .where(Payment.id == payment.id)
+            .values(
+                webhook_lease_expires_at=datetime.now(UTC) - timedelta(seconds=1),
+            )
+        )
         await session.commit()
     replacement = await service.claim_delivery(payment.id)
     assert replacement.attempt == 2
@@ -90,12 +100,17 @@ async def test_crashed_worker_lease_recovers_and_fences_old_result(session_facto
 
 async def test_retry_publish_failure_keeps_budget_in_database(session_factory, monkeypatch):
     import app.consumer as consumer
+
     payment = await create(session_factory)
     async with session_factory() as session:
         event = await session.scalar(select(OutboxMessage.payload))
     monkeypatch.setattr(consumer, "processor", PaymentProcessingService(session_factory))
-    monkeypatch.setattr(consumer.webhook_sender, "send", AsyncMock(side_effect=consumer.WebhookDeliveryError("503")))
-    monkeypatch.setattr(consumer.broker, "publish", AsyncMock(side_effect=ConnectionError("broker down")))
+    monkeypatch.setattr(
+        consumer.webhook_sender, "send", AsyncMock(side_effect=consumer.WebhookDeliveryError("503"))
+    )
+    monkeypatch.setattr(
+        consumer.broker, "publish", AsyncMock(side_effect=ConnectionError("broker down"))
+    )
     with pytest.raises(ConnectionError):
         await consumer.process_event(consumer.PaymentRequestedEvent.model_validate(event))
     async with session_factory() as session:
