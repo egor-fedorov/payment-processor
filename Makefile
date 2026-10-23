@@ -3,40 +3,32 @@ UV := uv
 PYTHON := $(UV) run --locked python
 TEST_COMPOSE := $(COMPOSE) -p payment-processor-tests -f docker-compose.test.yml
 
-.PHONY: help up down restart build logs ps clean \
-	migrate shell-api shell-postgres install compile test test-integration test-containers test-down
+.PHONY: help install up down build logs ps migrate format lint typecheck check test test-integration test-containers test-all test-down benchmark
 
 help:
-	@printf "Available targets:\n"
-	@printf "  make up            Start the full stack in Docker Compose\n"
-	@printf "  make down          Stop the stack\n"
-	@printf "  make restart       Recreate the stack\n"
-	@printf "  make build         Rebuild images\n"
-	@printf "  make logs          Tail compose logs\n"
-	@printf "  make ps            Show compose services status\n"
-	@printf "  make clean         Stop the stack and remove volumes\n"
-	@printf "  make migrate       Run Alembic migrations in compose\n"
-	@printf "  make shell-api     Open a shell in the api container\n"
-	@printf "  make shell-postgres Open psql in the postgres container\n"
-	@printf "  make install       Install Python dependencies locally\n"
-	@printf "  make compile       Run a quick Python syntax check\n"
-	@printf "  make test          Run unit tests\n"
-	@printf "  make test-integration Start isolated services and run integration tests\n"
-	@printf "  make test-containers  Test dependency restarts and RabbitMQ persistence\n"
-	@printf "  make test-down     Stop isolated test services\n"
+	@printf '%s\n' \
+	  'make install          Install locked runtime and development dependencies' \
+	  'make up               Build and start the application stack' \
+	  'make down             Stop the application stack, preserving volumes' \
+	  'make format           Apply Ruff lint fixes and formatting' \
+	  'make check            Check lockfile, lint, formatting, types and unit tests' \
+	  'make test-integration Run tests with isolated PostgreSQL/RabbitMQ namespaces' \
+	  'make test-containers  Test restarts, persistence and worker SIGKILL recovery' \
+	  'make test-all         Run all tests with a 90% branch coverage gate' \
+	  'make test-down        Stop the dedicated test containers' \
+	  'make benchmark        Compare 1 and 2 consumers (build image first)'
+
+install:
+	$(UV) sync --locked
 
 up:
-	$(COMPOSE) up --build
+	$(COMPOSE) up --build -d --wait
 
 down:
 	$(COMPOSE) down
 
-restart:
-	$(COMPOSE) down
-	$(COMPOSE) up --build
-
 build:
-	$(COMPOSE) build
+	docker build -t payment-processor:local .
 
 logs:
 	$(COMPOSE) logs -f
@@ -44,34 +36,41 @@ logs:
 ps:
 	$(COMPOSE) ps
 
-clean:
-	$(COMPOSE) down -v
-
 migrate:
 	$(COMPOSE) run --rm migrate
 
-shell-api:
-	$(COMPOSE) exec api sh
+format:
+	$(UV) run --locked ruff check --fix .
+	$(UV) run --locked ruff format .
 
-shell-postgres:
-	$(COMPOSE) exec postgres psql -U payment -d payments
+lint:
+	$(UV) run --locked ruff check .
+	$(UV) run --locked ruff format --check .
 
-install:
-	$(UV) sync --locked
+typecheck:
+	$(UV) run --locked mypy
 
-compile:
-	$(PYTHON) -m compileall app alembic
+check:
+	$(UV) lock --check
+	$(MAKE) lint typecheck test
 
 test:
-	$(PYTHON) -m pytest -m "not integration"
+	$(PYTHON) -m pytest -m 'not integration'
 
 test-integration:
 	$(TEST_COMPOSE) up -d --wait
-	RUN_INTEGRATION=1 $(PYTHON) -m pytest -m "not containers"
+	RUN_INTEGRATION=1 $(PYTHON) -m pytest -m 'not containers'
 
 test-containers:
 	$(TEST_COMPOSE) up -d --wait
 	RUN_INTEGRATION=1 RUN_CONTAINER_TESTS=1 $(PYTHON) -m pytest -m containers
 
+test-all:
+	$(TEST_COMPOSE) up -d --wait
+	RUN_INTEGRATION=1 RUN_CONTAINER_TESTS=1 $(PYTHON) -m pytest --cov=app --cov-report=term-missing --cov-report=xml
+
 test-down:
 	$(TEST_COMPOSE) down
+
+benchmark:
+	$(PYTHON) benchmarks/run.py

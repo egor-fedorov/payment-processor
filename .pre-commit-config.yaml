@@ -11,3 +11,9 @@ repos:
         entry: uv run --locked ruff format
         language: system
         types_or: [python, pyi]
+      - id: mypy
+        name: Mypy strict
+        entry: uv run --locked mypy
+        language: system
+        pass_filenames: false
+        types_or: [python, pyi]
