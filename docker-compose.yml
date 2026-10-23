@@ -1,3 +1,29 @@
+x-application: &application
+  image: payment-processor:local
+  build: .
+  init: true
+  environment: &app-environment
+    API_KEY: ${API_KEY:-super-secret-key}
+    DATABASE_URL: postgresql+asyncpg://payment:payment@postgres:5432/payments
+    RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+    DATABASE_POOL_SIZE: ${DATABASE_POOL_SIZE:-10}
+    DATABASE_POOL_TIMEOUT_SECONDS: ${DATABASE_POOL_TIMEOUT_SECONDS:-5}
+    CONSUMER_CONCURRENCY: ${CONSUMER_CONCURRENCY:-16}
+    OUTBOX_POLL_INTERVAL_SECONDS: ${OUTBOX_POLL_INTERVAL_SECONDS:-1}
+    OUTBOX_BATCH_SIZE: ${OUTBOX_BATCH_SIZE:-50}
+    OUTBOX_PUBLISH_CONCURRENCY: ${OUTBOX_PUBLISH_CONCURRENCY:-8}
+    OUTBOX_PUBLISH_TIMEOUT_SECONDS: ${OUTBOX_PUBLISH_TIMEOUT_SECONDS:-10}
+    OUTBOX_LEASE_SECONDS: ${OUTBOX_LEASE_SECONDS:-30}
+    OUTBOX_RETENTION_HOURS: ${OUTBOX_RETENTION_HOURS:-24}
+    PAYMENT_SUCCESS_RATE: ${PAYMENT_SUCCESS_RATE:-0.9}
+    PAYMENT_DELAY_MIN_SECONDS: ${PAYMENT_DELAY_MIN_SECONDS:-2}
+    PAYMENT_DELAY_MAX_SECONDS: ${PAYMENT_DELAY_MAX_SECONDS:-5}
+    RETRY_MAX_ATTEMPTS: ${RETRY_MAX_ATTEMPTS:-3}
+    RETRY_BASE_DELAY_SECONDS: ${RETRY_BASE_DELAY_SECONDS:-1}
+    WEBHOOK_TIMEOUT_SECONDS: ${WEBHOOK_TIMEOUT_SECONDS:-5}
+    WEBHOOK_LEASE_SECONDS: ${WEBHOOK_LEASE_SECONDS:-30}
+    DOCS_ENABLED: ${DOCS_ENABLED:-false}
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -7,75 +33,69 @@ services:
       POSTGRES_DB: payments
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U payment -d payments"]
-      interval: 5s
+      interval: 2s
       timeout: 5s
-      retries: 10
+      retries: 30
     ports:
-      - "5433:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5433}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
   rabbitmq:
-    image: rabbitmq:3.13-management
+    image: rabbitmq:4.3.6-management
     hostname: payment-rabbitmq
     volumes:
-      - rabbitmq_data:/var/lib/rabbitmq
+      - rabbitmq_v4_data:/var/lib/rabbitmq
     healthcheck:
       test: ["CMD-SHELL", "rabbitmq-diagnostics -q check_running && rabbitmq-diagnostics -q check_port_connectivity"]
-      interval: 5s
+      interval: 2s
       timeout: 5s
-      retries: 10
+      retries: 30
     ports:
-      - "5672:5672"
-      - "15672:15672"
+      - "127.0.0.1:${AMQP_PORT:-5672}:5672"
+      - "127.0.0.1:${RABBITMQ_MANAGEMENT_PORT:-15672}:15672"
 
   migrate:
-    build: .
-    environment: &app-environment
-      API_KEY: ${API_KEY:-super-secret-key}
-      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://payment:payment@postgres:5432/payments}
-      RABBITMQ_URL: ${RABBITMQ_URL:-amqp://guest:guest@rabbitmq:5672/}
-      OUTBOX_POLL_INTERVAL_SECONDS: ${OUTBOX_POLL_INTERVAL_SECONDS:-1}
-      OUTBOX_BATCH_SIZE: ${OUTBOX_BATCH_SIZE:-50}
-      PAYMENT_SUCCESS_RATE: ${PAYMENT_SUCCESS_RATE:-0.9}
-      PAYMENT_DELAY_MIN_SECONDS: ${PAYMENT_DELAY_MIN_SECONDS:-2}
-      PAYMENT_DELAY_MAX_SECONDS: ${PAYMENT_DELAY_MAX_SECONDS:-5}
-      RETRY_MAX_ATTEMPTS: ${RETRY_MAX_ATTEMPTS:-3}
-      RETRY_BASE_DELAY_SECONDS: ${RETRY_BASE_DELAY_SECONDS:-1}
-      WEBHOOK_TIMEOUT_SECONDS: ${WEBHOOK_TIMEOUT_SECONDS:-5}
-      WEBHOOK_LEASE_SECONDS: ${WEBHOOK_LEASE_SECONDS:-30}
-      DOCS_ENABLED: ${DOCS_ENABLED:-false}
+    <<: *application
     depends_on:
       postgres:
         condition: service_healthy
     command: ["alembic", "upgrade", "head"]
 
   api:
-    build: .
-    environment: *app-environment
+    <<: *application
     depends_on:
-      postgres:
-        condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
       migrate:
         condition: service_completed_successfully
-    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/live', timeout=2)"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
     ports:
-      - "8000:8000"
+      - "127.0.0.1:${API_PORT:-8000}:8000"
 
   consumer:
-    build: .
-    environment: *app-environment
+    <<: *application
     depends_on:
-      postgres:
-        condition: service_healthy
       rabbitmq:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
     command: ["python", "-m", "app.consumer"]
+    stop_grace_period: 40s
+
+  dispatcher:
+    <<: *application
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    command: ["python", "-m", "app.dispatcher"]
+    stop_grace_period: 40s
 
 volumes:
   postgres_data:
-  rabbitmq_data:
+  rabbitmq_v4_data:
