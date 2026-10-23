@@ -1,8 +1,9 @@
 COMPOSE := docker compose
 PYTHON := python3
+TEST_COMPOSE := $(COMPOSE) -p payment-processor-tests -f docker-compose.test.yml
 
 .PHONY: help up down restart build logs ps clean \
-	migrate shell-api shell-postgres install compile
+	migrate shell-api shell-postgres install compile test test-integration test-containers test-down
 
 help:
 	@printf "Available targets:\n"
@@ -18,6 +19,10 @@ help:
 	@printf "  make shell-postgres Open psql in the postgres container\n"
 	@printf "  make install       Install Python dependencies locally\n"
 	@printf "  make compile       Run a quick Python syntax check\n"
+	@printf "  make test          Run unit tests\n"
+	@printf "  make test-integration Start isolated services and run integration tests\n"
+	@printf "  make test-containers  Test dependency restarts and RabbitMQ persistence\n"
+	@printf "  make test-down     Stop isolated test services\n"
 
 up:
 	$(COMPOSE) up --build
@@ -56,3 +61,17 @@ install:
 
 compile:
 	$(PYTHON) -m compileall app alembic
+
+test:
+	$(PYTHON) -m pytest -m "not integration"
+
+test-integration:
+	$(TEST_COMPOSE) up -d --wait
+	RUN_INTEGRATION=1 $(PYTHON) -m pytest -m "not containers"
+
+test-containers:
+	$(TEST_COMPOSE) up -d --wait
+	RUN_INTEGRATION=1 RUN_CONTAINER_TESTS=1 $(PYTHON) -m pytest -m containers
+
+test-down:
+	$(TEST_COMPOSE) down
