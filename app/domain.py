@@ -1,4 +1,7 @@
+from dataclasses import dataclass
+from decimal import Decimal
 from enum import StrEnum
+from typing import Any
 
 
 class Currency(StrEnum):
@@ -11,3 +14,12 @@ class PaymentStatus(StrEnum):
     PENDING = "pending"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
+
+
+@dataclass(frozen=True)
+class CreatePayment:
+    amount: Decimal
+    currency: Currency
+    description: str
+    metadata: dict[str, Any]
+    webhook_url: str

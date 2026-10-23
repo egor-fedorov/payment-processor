@@ -5,7 +5,8 @@ from uuid import UUID
 
 from pydantic import AnyHttpUrl, BaseModel, Field
 
-from app.domain import Currency, PaymentStatus
+from app.db.models import Payment
+from app.domain import CreatePayment, Currency, PaymentStatus
 
 
 class PaymentCreateRequest(BaseModel):
@@ -15,6 +16,11 @@ class PaymentCreateRequest(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
     webhook_url: AnyHttpUrl
 
+    def to_command(self) -> CreatePayment:
+        return CreatePayment(
+            self.amount, self.currency, self.description, self.metadata, str(self.webhook_url)
+        )
+
 
 class PaymentAcceptedResponse(BaseModel):
     payment_id: UUID
@@ -22,7 +28,7 @@ class PaymentAcceptedResponse(BaseModel):
     created_at: datetime
 
     @classmethod
-    def from_payment(cls, payment) -> PaymentAcceptedResponse:
+    def from_payment(cls, payment: Payment) -> PaymentAcceptedResponse:
         return cls(
             payment_id=payment.id,
             status=payment.status,
@@ -46,7 +52,7 @@ class PaymentDetailsResponse(BaseModel):
     last_error: str | None
 
     @classmethod
-    def from_payment(cls, payment) -> PaymentDetailsResponse:
+    def from_payment(cls, payment: Payment) -> PaymentDetailsResponse:
         return cls(
             payment_id=payment.id,
             amount=payment.amount,

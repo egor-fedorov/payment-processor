@@ -6,9 +6,10 @@ import pytest
 from sqlalchemy import func, select, update
 
 from app.api.schemas import PaymentCreateRequest
+from app.contracts import PaymentRequestedEvent
 from app.core.config import get_settings
 from app.db.models import OutboxMessage, Payment
-from app.messaging.schemas import PaymentRequestedEvent
+from app.domain import PaymentStatus
 from app.services.payments import (
     DeliveryBusyError,
     DeliveryExhaustedError,
@@ -129,3 +130,27 @@ async def test_retry_publish_failure_keeps_budget_in_database(session_factory, m
         assert row.webhook_attempts == 1
         assert row.webhook_next_attempt_at is not None
         assert row.webhook_lease_token is None
+
+
+async def test_gateway_does_not_hold_database_connection(session_factory):
+    payment = await create(session_factory)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    class Gateway:
+        async def process(self, payment_id):
+            entered.set()
+            await release.wait()
+            return PaymentStatus.SUCCEEDED
+
+    service = PaymentProcessingService(session_factory, get_settings(), gateway=Gateway())
+    task = asyncio.create_task(service.claim_delivery(payment.id))
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        # A second transaction can lock the same row while the gateway waits.
+        async with session_factory() as session:
+            row = await asyncio.wait_for(session.get(Payment, payment.id, with_for_update=True), 1)
+            assert row.status == PaymentStatus.PENDING
+    finally:
+        release.set()
+        await task

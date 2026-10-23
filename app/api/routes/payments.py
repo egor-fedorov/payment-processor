@@ -27,7 +27,7 @@ async def create_payment(
         ..., alias="Idempotency-Key", min_length=1, max_length=255, pattern=r"\S"
     ),
 ) -> PaymentAcceptedResponse:
-    payment = await PaymentService(session).create_payment(payload, idempotency_key)
+    payment = await PaymentService(session).create_payment(payload.to_command(), idempotency_key)
     return PaymentAcceptedResponse.from_payment(payment)
 
 

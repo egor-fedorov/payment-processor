@@ -1,19 +1,17 @@
-import asyncio
-import random
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 from decimal import Decimal
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.api.schemas import PaymentCreateRequest
+from app.contracts import PaymentRequestedEvent, PaymentWebhookPayload
 from app.core.config import Settings
 from app.db.models import OutboxMessage, Payment
-from app.domain import PaymentStatus
-from app.messaging.schemas import PaymentRequestedEvent, PaymentWebhookPayload
+from app.db.payments import PaymentRepository
+from app.domain import CreatePayment, PaymentStatus
+from app.services.gateway import Clock, PaymentGateway, SimulatedGateway, SystemClock
 
 
 class PaymentNotFoundError(Exception):
@@ -26,7 +24,7 @@ class PaymentService:
 
     async def create_payment(
         self,
-        payload: PaymentCreateRequest,
+        payload: CreatePayment,
         idempotency_key: str,
     ) -> Payment:
         existing = await self.get_by_idempotency_key(idempotency_key)
@@ -83,12 +81,10 @@ class PaymentService:
         return payment
 
     async def get_by_idempotency_key(self, idempotency_key: str) -> Payment | None:
-        return await self._session.scalar(
-            select(Payment).where(Payment.idempotency_key == idempotency_key)
-        )
+        return await PaymentRepository(self._session).by_key(idempotency_key)
 
     async def get_payment(self, payment_id: UUID) -> Payment | None:
-        return await self._session.get(Payment, payment_id)
+        return await PaymentRepository(self._session).get(payment_id)
 
 
 class DeliveryBusyError(Exception):
@@ -116,10 +112,17 @@ class WebhookDelivery:
 
 class PaymentProcessingService:
     def __init__(
-        self, session_factory: async_sessionmaker[AsyncSession], settings: Settings
+        self,
+        session_factory: async_sessionmaker[AsyncSession],
+        settings: Settings,
+        *,
+        gateway: PaymentGateway | None = None,
+        clock: Clock | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._settings = settings
+        self._gateway = gateway or SimulatedGateway(settings)
+        self._clock = clock or SystemClock()
 
     async def claim_delivery(self, payment_id: UUID) -> WebhookDelivery | None:
         async with self._session_factory() as session:
@@ -129,7 +132,7 @@ class PaymentProcessingService:
             if payment.webhook_delivered_at or payment.webhook_dead_lettered_at:
                 return None
 
-            now = datetime.now(UTC)
+            now = self._clock.now()
             if payment.webhook_lease_expires_at and payment.webhook_lease_expires_at > now:
                 raise DeliveryBusyError("webhook delivery is already in progress")
             if (
@@ -145,26 +148,28 @@ class PaymentProcessingService:
             if payment.webhook_next_attempt_at and payment.webhook_next_attempt_at > now:
                 raise DeliveryBusyError("webhook retry delay has not elapsed")
 
-            if payment.status == PaymentStatus.PENDING:
-                await asyncio.sleep(
-                    random.uniform(
-                        self._settings.payment_delay_min_seconds,
-                        self._settings.payment_delay_max_seconds,
-                    )
-                )
-                payment.status = (
-                    PaymentStatus.SUCCEEDED
-                    if random.random() < self._settings.payment_success_rate
-                    else PaymentStatus.FAILED
-                )
-                payment.processed_at = datetime.now(UTC)
+            token = uuid4()
+            payment.webhook_lease_token = token
+            payment.webhook_lease_expires_at = now + timedelta(
+                seconds=self._settings.webhook_lease_seconds
+            )
+            pending = payment.status == PaymentStatus.PENDING
+            await session.commit()
+
+        outcome = await self._gateway.process(payment_id) if pending else None
+        async with self._session_factory() as session:
+            payment = await PaymentRepository(session).get(payment_id, lock=True)
+            if payment is None or payment.webhook_lease_token != token:
+                raise DeliveryLeaseLostError(str(payment_id))
+            if outcome is not None:
+                payment.status = outcome
+                payment.processed_at = self._clock.now()
 
             # Reserve and count before HTTP. A crash uses this attempt's budget;
             # its original unacked RabbitMQ message can recover after expiry.
-            token = uuid4()
             payment.webhook_attempts += 1
             payment.webhook_lease_token = token
-            payment.webhook_lease_expires_at = datetime.now(UTC) + timedelta(
+            payment.webhook_lease_expires_at = self._clock.now() + timedelta(
                 seconds=self._settings.webhook_lease_seconds
             )
             payment.webhook_next_attempt_at = None
@@ -195,7 +200,7 @@ class PaymentProcessingService:
             payment = self._check_lease(
                 await session.get(Payment, delivery.payment_id, with_for_update=True), delivery
             )
-            payment.webhook_delivered_at = datetime.now(UTC)
+            payment.webhook_delivered_at = self._clock.now()
             payment.webhook_lease_token = None
             payment.webhook_lease_expires_at = None
             payment.last_error = None
@@ -206,7 +211,7 @@ class PaymentProcessingService:
             payment = self._check_lease(
                 await session.get(Payment, delivery.payment_id, with_for_update=True), delivery
             )
-            now = datetime.now(UTC)
+            now = self._clock.now()
             payment.webhook_lease_token = None
             payment.webhook_lease_expires_at = None
             payment.last_error = error_message
@@ -224,5 +229,5 @@ class PaymentProcessingService:
             payment = await session.get(Payment, payment_id, with_for_update=True)
             if payment is None:
                 raise PaymentNotFoundError(str(payment_id))
-            payment.webhook_dead_lettered_at = datetime.now(UTC)
+            payment.webhook_dead_lettered_at = self._clock.now()
             await session.commit()

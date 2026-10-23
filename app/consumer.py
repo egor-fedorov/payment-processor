@@ -8,10 +8,10 @@ from faststream import AckPolicy, FastStream
 from faststream.rabbit import RabbitBroker
 from pydantic import ValidationError
 
+from app.contracts import DeadLetterEvent, PaymentRequestedEvent
 from app.core.config import Settings, get_settings
 from app.db.session import create_database
 from app.messaging.broker import create_broker
-from app.messaging.schemas import DeadLetterEvent, PaymentRequestedEvent
 from app.messaging.topology import DLQ_QUEUE, PAYMENTS_QUEUE, declare_topology, retry_queue
 from app.services.payments import (
     DeliveryBusyError,

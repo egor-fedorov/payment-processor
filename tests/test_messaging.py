@@ -8,10 +8,10 @@ import pytest
 from sqlalchemy import select
 
 from app.api.schemas import PaymentCreateRequest
+from app.contracts import PaymentRequestedEvent
 from app.core.config import get_settings
 from app.db.models import OutboxMessage, Payment
 from app.messaging.dispatcher import OutboxDispatcher
-from app.messaging.schemas import PaymentRequestedEvent
 from app.messaging.topology import DLQ_QUEUE, PAYMENTS_QUEUE, retry_queue
 from app.services.payments import PaymentProcessingService, PaymentService
 from app.services.webhook import WebhookDeliveryError
