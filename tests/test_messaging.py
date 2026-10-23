@@ -205,3 +205,56 @@ async def test_failure_recording_error_recovers_through_outbox(session_factory, 
         stop.set()
         await task
         await consumer.broker.stop()
+
+
+async def test_prefetch_bounds_concurrency(session_factory, rabbit, settings, relay):
+    settings = settings.model_copy(update={"consumer_concurrency": 3})
+    active = 0
+    peak = 0
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def send(*args):
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        if active == 3:
+            entered.set()
+        try:
+            await release.wait()
+        finally:
+            active -= 1
+
+    sender = AsyncMock()
+    sender.send.side_effect = send
+    consumer = Consumer(
+        create_broker(settings),
+        PaymentProcessingService(session_factory, settings),
+        sender,
+        settings,
+    )
+    await consumer.broker.start()
+    try:
+        for index in range(8):
+            async with session_factory() as session:
+                await PaymentService(session).create_payment(
+                    PaymentCreateRequest(
+                        amount="1.00",
+                        currency="USD",
+                        description="bounded",
+                        webhook_url="http://example.com/hook",
+                    ).to_command(),
+                    f"bounded-{index}",
+                )
+        await asyncio.wait_for(entered.wait(), 3)
+        # Give excess deliveries an opportunity to start while all slots are held.
+        await asyncio.sleep(0.15)
+        assert peak == 3
+    finally:
+        release.set()
+
+        async def finished():
+            return sender.send.await_count == 8 and active == 0
+
+        await eventually(finished)
+        await consumer.broker.stop()

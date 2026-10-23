@@ -98,3 +98,93 @@ async def test_dispatcher_recovers_after_dependency_restart(
         stop.set()
         await asyncio.wait_for(task, timeout=5)
         await compose("up", "-d", "--wait", service)
+
+
+async def test_killed_worker_recovers_from_durable_reservation(
+    session_factory, rabbit, settings, relay, tmp_path
+):
+    import sys
+
+    from app.db.models import Payment
+    from app.domain import PaymentStatus
+
+    # A pending gateway call leaves a durable reservation. SIGKILL skips every
+    # application cleanup hook, exercising recovery rather than graceful stop.
+    env = {
+        **os.environ,
+        **{
+            key.upper(): str(value).lower() if isinstance(value, bool) else str(value)
+            for key, value in settings.model_dump().items()
+        },
+    }
+    env.update(
+        PAYMENT_DELAY_MIN_SECONDS="3",
+        PAYMENT_DELAY_MAX_SECONDS="3",
+        WEBHOOK_TIMEOUT_SECONDS="0.1",
+        WEBHOOK_LEASE_SECONDS="4",
+        RETRY_MAX_ATTEMPTS="1",
+    )
+    async with session_factory() as session:
+        payment = await PaymentService(session).create_payment(
+            PaymentCreateRequest(
+                amount="1.00",
+                currency="USD",
+                description="crash probe",
+                webhook_url="http://127.0.0.1:1/hook",
+            ).to_command(),
+            "crash-probe",
+        )
+    log = (tmp_path / "worker.log").open("wb")
+    worker = await asyncio.create_subprocess_exec(
+        sys.executable, "-m", "app.consumer", env=env, stdout=log, stderr=log
+    )
+    replacement = None
+    try:
+
+        async def reserved():
+            async with session_factory() as session:
+                row = await session.get(Payment, payment.id)
+                return row.webhook_lease_token is not None and row.status == PaymentStatus.PENDING
+
+        await wait_until(reserved)
+        worker.kill()
+        await worker.wait()
+        # Remove the original broker delivery by consuming its redelivery. The
+        # scheduled recovery event must independently drive the next worker.
+        queue = await rabbit.declare_queue(PAYMENTS_QUEUE)
+        redelivered = []
+
+        async def returned():
+            message = await queue.get(fail=False)
+            if message is not None:
+                redelivered.append(message)
+                return True
+            return False
+
+        await wait_until(returned, deadline_seconds=2)
+        assert json.loads(redelivered[0].body)["recovery_token"] is None
+        await redelivered[0].ack()
+        replacement = await asyncio.create_subprocess_exec(
+            sys.executable, "-m", "app.consumer", env=env, stdout=log, stderr=log
+        )
+
+        async def exhausted():
+            async with session_factory() as session:
+                row = await session.get(Payment, payment.id)
+                return row.webhook_exhausted_at is not None
+
+        await wait_until(exhausted)
+        async with session_factory() as session:
+            row = await session.get(Payment, payment.id)
+            assert row.status != PaymentStatus.PENDING
+            assert row.webhook_attempts == 1
+    finally:
+        for process in (worker, replacement):
+            if process is not None and process.returncode is None:
+                process.terminate()
+                try:
+                    await asyncio.wait_for(process.wait(), 10)
+                except TimeoutError:
+                    process.kill()
+                    await process.wait()
+        log.close()
