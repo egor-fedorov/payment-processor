@@ -1,0 +1,50 @@
+{
+  "timestamp": "2026-10-23T19:12:10.513997+00:00",
+  "platform": "Linux-7.3.0-5-cachyos-x86_64-with-glibc2.44",
+  "logical_cpus": 20,
+  "python": "3.14.9",
+  "consumer_concurrency": 4,
+  "gateway_delay_seconds": [
+    2,
+    5
+  ],
+  "runs": [
+    {
+      "payments": 40,
+      "duration_seconds": 37.456,
+      "throughput_payments_per_second": 1.068,
+      "post_latency_ms": {
+        "p50": 53.039,
+        "p95": 83.984,
+        "p99": 87.894
+      },
+      "end_to_end_ms": {
+        "p50": 20000.72,
+        "p95": 34391.978,
+        "p99": 36566.75
+      },
+      "webhook_attempts": 40,
+      "outbox_backlog_after": 0,
+      "consumer_replicas": 1
+    },
+    {
+      "payments": 40,
+      "duration_seconds": 19.727,
+      "throughput_payments_per_second": 2.028,
+      "post_latency_ms": {
+        "p50": 57.034,
+        "p95": 100.163,
+        "p99": 118.457
+      },
+      "end_to_end_ms": {
+        "p50": 10477.239,
+        "p95": 18214.372,
+        "p99": 19370.736
+      },
+      "webhook_attempts": 40,
+      "outbox_backlog_after": 0,
+      "consumer_replicas": 2
+    }
+  ],
+  "revision": "dc89937"
+}
