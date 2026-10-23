@@ -1,7 +1,8 @@
 COMPOSE := docker compose
+APP_COMPOSE := $(COMPOSE) -f deploy/compose.yml
 UV := uv
 PYTHON := $(UV) run --locked python
-TEST_COMPOSE := $(COMPOSE) -p payment-processor-tests -f docker-compose.test.yml
+TEST_COMPOSE := $(COMPOSE) -p payment-processor-tests -f deploy/compose.test.yml
 
 .PHONY: help install up down build logs ps migrate format lint typecheck architecture check test test-integration test-containers test-all test-down benchmark
 
@@ -23,22 +24,22 @@ install:
 	$(UV) sync --locked
 
 up:
-	$(COMPOSE) up --build -d --wait
+	$(APP_COMPOSE) up --build -d --wait
 
 down:
-	$(COMPOSE) down
+	$(APP_COMPOSE) down
 
 build:
 	docker build -t payment-processor:local .
 
 logs:
-	$(COMPOSE) logs -f
+	$(APP_COMPOSE) logs -f
 
 ps:
-	$(COMPOSE) ps
+	$(APP_COMPOSE) ps
 
 migrate:
-	$(COMPOSE) run --rm migrate
+	$(APP_COMPOSE) run --rm migrate
 
 format:
 	$(UV) run --locked ruff check --fix .

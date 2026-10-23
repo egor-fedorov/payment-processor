@@ -20,6 +20,10 @@ consumer. API доступен на `http://localhost:8000`, RabbitMQ UI — н�
 `http://localhost:15672` (`guest` / `guest`). Порты опубликованы только на
 loopback. `make down` сохраняет данные в именованных volumes.
 
+Compose-файлы находятся в `deploy/`: основной стек — `compose.yml`,
+тестовые зависимости — `compose.test.yml`, локальный webhook-получатель —
+`compose.benchmark.yml`. Команды Makefile подставляют нужные пути.
+
 ```bash
 curl -s http://localhost:8000/api/v1/payments \
   -H 'Content-Type: application/json' \
@@ -93,7 +97,7 @@ Lease больше максимальной задержки шлюза и HTTP 
 ## Масштабирование и настройки
 
 ```bash
-docker compose up -d --scale consumer=2 --scale dispatcher=2
+docker compose -f deploy/compose.yml up -d --scale consumer=2 --scale dispatcher=2
 ```
 
 | Настройка | По умолчанию | Назначение |
@@ -137,6 +141,10 @@ uv run --locked pre-commit install
 make test-all                # все тесты и coverage с учётом ветвлений >= 90%
 make test-down
 ```
+
+Данные coverage, XML и HTML-отчёты сохраняются в `reports/coverage/`;
+каталог `reports/` исключён из Git. Форматирование Python-кода задаёт Ruff
+в `pyproject.toml`.
 
 Зависимости приложения и разработки зафиксированы в `uv.lock`. CI выполняет
 те же проверки, интеграционные сценарии с настоящими PostgreSQL/RabbitMQ,

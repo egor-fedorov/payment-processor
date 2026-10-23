@@ -1,6 +1,8 @@
+name: payment-processor
+
 x-application: &application
   image: payment-processor:local
-  build: .
+  build: ..
   init: true
   environment: &app-environment
     API_KEY: ${API_KEY:-super-secret-key}

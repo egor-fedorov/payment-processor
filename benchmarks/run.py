@@ -159,9 +159,9 @@ def main() -> None:
         "-p",
         project,
         "-f",
-        str(ROOT / "docker-compose.yml"),
+        str(ROOT / "deploy/compose.yml"),
         "-f",
-        str(ROOT / "docker-compose.benchmark.yml"),
+        str(ROOT / "deploy/compose.benchmark.yml"),
     ]
 
     def compose(*arguments: str) -> None:

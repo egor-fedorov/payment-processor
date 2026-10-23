@@ -5,7 +5,7 @@ services:
     command: ["uvicorn", "benchmarks.receiver:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]
     working_dir: /srv
     volumes:
-      - ./benchmarks:/srv/benchmarks:ro
+      - ../benchmarks:/srv/benchmarks:ro
     ports:
       - "127.0.0.1:${RECEIVER_PORT:-18081}:8000"
     healthcheck:

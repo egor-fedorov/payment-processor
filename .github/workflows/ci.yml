@@ -42,12 +42,12 @@ jobs:
       - run: uv sync --locked
       - run: make test-all
       - if: failure()
-        run: docker compose -p payment-processor-tests -f docker-compose.test.yml logs --tail 100
+        run: docker compose -p payment-processor-tests -f deploy/compose.test.yml logs --tail 100
       - if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: coverage
-          path: coverage.xml
+          path: reports/coverage/coverage.xml
           if-no-files-found: ignore
       - if: always()
         run: make test-down

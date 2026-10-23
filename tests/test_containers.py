@@ -27,7 +27,7 @@ async def compose(*args):
         "-p",
         "payment-processor-tests",
         "-f",
-        "docker-compose.test.yml",
+        "deploy/compose.test.yml",
         *args,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,

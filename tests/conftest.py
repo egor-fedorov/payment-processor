@@ -43,7 +43,7 @@ def settings():
 @pytest.fixture(scope="session")
 def migrated_database(settings):
     if os.getenv("RUN_INTEGRATION") != "1":
-        pytest.skip("Set RUN_INTEGRATION=1 and start docker-compose.test.yml")
+        pytest.skip("Set RUN_INTEGRATION=1 and start deploy/compose.test.yml")
     target = make_url(settings.database_url)
     admin = target.set(drivername="postgresql", database="postgres").render_as_string(
         hide_password=False
