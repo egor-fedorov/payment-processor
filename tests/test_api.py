@@ -8,9 +8,9 @@ import pytest
 from sqlalchemy.exc import IntegrityError
 
 from app.api.schemas import PaymentCreateRequest
-from app.core.config import Settings, get_settings
+from app.core.config import Settings
 from app.db.session import get_session
-from app.main import app
+from app.main import create_app
 from app.services.payments import PaymentService
 
 PAYLOAD = {
@@ -22,7 +22,9 @@ PAYLOAD = {
 
 
 @pytest.mark.parametrize("key", ["", " ", "x" * 256])
-async def test_invalid_idempotency_key(key):
+async def test_invalid_idempotency_key(key, settings):
+    app = create_app(settings)
+
     async def session():
         yield AsyncMock()
 
@@ -34,7 +36,7 @@ async def test_invalid_idempotency_key(key):
             response = await client.post(
                 "/api/v1/payments",
                 json=PAYLOAD,
-                headers={"X-API-Key": get_settings().api_key, "Idempotency-Key": key},
+                headers={"X-API-Key": settings.api_key, "Idempotency-Key": key},
             )
         assert response.status_code == 422
     finally:
@@ -51,7 +53,9 @@ async def test_flush_conflict_returns_existing_payment():
     session.flush.side_effect = IntegrityError("insert", {}, original)
     existing = SimpleNamespace(id=uuid4(), created_at=datetime.now(UTC))
     session.scalar.side_effect = [None, existing]
-    result = await PaymentService(session).create_payment(PaymentCreateRequest(**PAYLOAD), "key")
+    result = await PaymentService(session).create_payment(
+        PaymentCreateRequest(**PAYLOAD).to_command(), "key"
+    )
     assert result is existing
     session.rollback.assert_awaited_once()
     session.commit.assert_not_awaited()
@@ -63,13 +67,16 @@ async def test_unrelated_integrity_error_is_not_hidden():
     session.scalar.return_value = None
     session.flush.side_effect = IntegrityError("insert", {}, Exception("other constraint"))
     with pytest.raises(IntegrityError):
-        await PaymentService(session).create_payment(PaymentCreateRequest(**PAYLOAD), "key")
+        await PaymentService(session).create_payment(
+            PaymentCreateRequest(**PAYLOAD).to_command(), "key"
+        )
     assert session.scalar.await_count == 1
     session.rollback.assert_awaited_once()
 
 
 @pytest.mark.parametrize("path", ["/docs", "/redoc", "/openapi.json"])
-async def test_documentation_is_disabled_by_default(path):
+async def test_documentation_is_disabled_by_default(path, settings):
+    app = create_app(settings)
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:

@@ -1,0 +1,34 @@
+import asyncio
+import signal
+
+from app.core.config import Settings, get_settings
+from app.db.session import create_database
+from app.messaging.broker import create_broker
+from app.messaging.dispatcher import OutboxDispatcher
+from app.messaging.topology import declare_topology
+
+
+async def run(settings: Settings, stop: asyncio.Event) -> None:
+    database = create_database(settings)
+    broker = create_broker(settings)
+    try:
+        await broker.start()
+        await declare_topology(broker)
+        await OutboxDispatcher(database.sessions, broker, settings).run(stop)
+    finally:
+        try:
+            await broker.stop()
+        finally:
+            await database.close()
+
+
+async def main() -> None:
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, stop.set)
+    await run(get_settings(), stop)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

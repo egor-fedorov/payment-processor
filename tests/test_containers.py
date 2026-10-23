@@ -7,7 +7,6 @@ import pytest
 from sqlalchemy import select
 
 from app.api.schemas import PaymentCreateRequest
-from app.core.config import get_settings
 from app.db.models import OutboxMessage
 from app.messaging.broker import create_broker
 from app.messaging.dispatcher import OutboxDispatcher
@@ -46,11 +45,11 @@ async def wait_until(check, deadline_seconds=30):
     raise AssertionError("Recovery timed out")
 
 
-async def test_rabbitmq_recreation_keeps_persistent_messages(rabbit):
+async def test_rabbitmq_recreation_keeps_persistent_messages(rabbit, settings):
     await rabbit.publish({"persistence_probe": True}, queue=PAYMENTS_QUEUE, persist=True)
     await rabbit.stop()
     await compose("up", "-d", "--force-recreate", "--wait", "rabbitmq")
-    recovered = create_broker(get_settings())
+    recovered = create_broker(settings)
     await recovered.start()
     try:
         queue = await recovered.declare_queue(PAYMENTS_QUEUE)
@@ -63,7 +62,9 @@ async def test_rabbitmq_recreation_keeps_persistent_messages(rabbit):
 
 
 @pytest.mark.parametrize("service", ["postgres", "rabbitmq"])
-async def test_dispatcher_recovers_after_dependency_restart(service, session_factory, rabbit):
+async def test_dispatcher_recovers_after_dependency_restart(
+    service, session_factory, rabbit, settings
+):
     async with session_factory() as session:
         await PaymentService(session).create_payment(
             PaymentCreateRequest(
@@ -71,11 +72,10 @@ async def test_dispatcher_recovers_after_dependency_restart(service, session_fac
                 currency="EUR",
                 description="recovery",
                 webhook_url="https://example.com/hook",
-            ),
+            ).to_command(),
             "recovery",
         )
-    dispatcher = OutboxDispatcher(session_factory, rabbit, get_settings())
-    dispatcher._poll_interval = 0.1
+    dispatcher = OutboxDispatcher(session_factory, rabbit, settings)
     stop = asyncio.Event()
     await compose("stop", service)
     task = asyncio.create_task(dispatcher.run(stop))

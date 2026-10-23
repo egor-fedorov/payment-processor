@@ -14,12 +14,13 @@ services:
       retries: 30
 
   rabbitmq:
-    image: rabbitmq:3.13-management
+    image: rabbitmq:4.3.6-management
     hostname: payment-test-rabbitmq
     ports:
       - "127.0.0.1:15673:5672"
+      - "127.0.0.1:15674:15672"
     volumes:
-      - rabbitmq_test_data:/var/lib/rabbitmq
+      - rabbitmq_test_v4_data:/var/lib/rabbitmq
     healthcheck:
       test: ["CMD-SHELL", "rabbitmq-diagnostics -q check_running && rabbitmq-diagnostics -q check_port_connectivity"]
       interval: 2s
@@ -27,4 +28,4 @@ services:
       retries: 30
 
 volumes:
-  rabbitmq_test_data:
+  rabbitmq_test_v4_data:

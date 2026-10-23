@@ -1,14 +1,14 @@
 import asyncio
 import logging
-from datetime import UTC, datetime
+from contextlib import suppress
+from datetime import timedelta
 
 from faststream.rabbit import RabbitBroker
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import Settings
-from app.db.models import OutboxMessage
-from app.messaging.topology import PAYMENTS_QUEUE
+from app.db.outbox import OutboxRepository, Publication
+from app.services.gateway import Clock, SystemClock
 
 logger = logging.getLogger(__name__)
 
@@ -19,79 +19,60 @@ class OutboxDispatcher:
         session_factory: async_sessionmaker[AsyncSession],
         broker: RabbitBroker,
         settings: Settings,
+        *,
+        clock: Clock | None = None,
     ) -> None:
-        self._session_factory = session_factory
+        self._repository = OutboxRepository(session_factory, settings)
         self._broker = broker
-        self._batch_size = settings.outbox_batch_size
-        self._poll_interval = settings.outbox_poll_interval_seconds
+        self._settings = settings
+        self._clock = clock or SystemClock()
         self.last_error: str | None = None
 
     async def run(self, stop_event: asyncio.Event) -> None:
-        retry_delay = min(self._poll_interval, 30.0)
+        retry_delay = min(self._settings.outbox_poll_interval_seconds, 30.0)
+        cleanup_at = self._clock.now()
         while not stop_event.is_set():
             try:
                 dispatched = await self.dispatch_batch()
+                if self._clock.now() >= cleanup_at:
+                    await self._repository.prune(self._clock.now())
+                    cleanup_at = self._clock.now() + timedelta(minutes=1)
             except Exception as exc:
                 self.last_error = repr(exc)
-                logger.exception("Outbox dispatch failed; retrying in %.1fs", retry_delay)
+                logger.exception("Outbox batch failed")
                 delay = retry_delay
-                retry_delay = min(retry_delay * 2, 30.0)
+                retry_delay = min(retry_delay * 2, 30)
             else:
-                self.last_error = None
-                retry_delay = min(self._poll_interval, 30.0)
+                retry_delay = min(self._settings.outbox_poll_interval_seconds, 30.0)
                 if dispatched:
                     continue
-                delay = self._poll_interval
-
-            try:
+                delay = self._settings.outbox_poll_interval_seconds
+            with suppress(TimeoutError):
                 await asyncio.wait_for(stop_event.wait(), timeout=delay)
-            except TimeoutError:
-                continue
 
     async def dispatch_batch(self) -> int:
-        async with self._session_factory() as session:
-            ids = list(
-                (
-                    await session.scalars(
-                        select(OutboxMessage.id)
-                        .where(OutboxMessage.published_at.is_(None))
-                        .order_by(OutboxMessage.created_at)
-                        .limit(self._batch_size)
-                    )
-                ).all()
-            )
+        items = await self._repository.claim(self._clock.now())
+        results = await asyncio.gather(*(self._publish(item) for item in items))
+        if all(results):
+            self.last_error = None
+        return sum(results)
 
-        dispatched = 0
-        for message_id in ids:
-            published = await self._dispatch_one(message_id)
-            if published:
-                dispatched += 1
-
-        return dispatched
-
-    async def _dispatch_one(self, message_id) -> bool:
-        async with self._session_factory() as session:
-            message = await session.scalar(
-                select(OutboxMessage)
-                .where(OutboxMessage.id == message_id)
-                .with_for_update(skip_locked=True)
-            )
-            if message is None or message.published_at is not None:
-                return False
-
-            await asyncio.wait_for(
-                self._broker.publish(
-                    message.payload,
-                    queue=PAYMENTS_QUEUE,
-                    headers=message.headers,
-                    correlation_id=str(message.aggregate_id),
-                    message_id=str(message.id),
+    async def _publish(self, item: Publication) -> bool:
+        error = None
+        try:
+            async with asyncio.timeout(self._settings.outbox_publish_timeout_seconds):
+                await self._broker.publish(
+                    item.payload,
+                    queue=item.destination,
+                    correlation_id=str(item.aggregate_id),
+                    message_id=str(item.id),
                     persist=True,
                     mandatory=True,
-                    timeout=10,
-                ),
-                timeout=10,
-            )
-            message.published_at = datetime.now(UTC)
-            await session.commit()
-            return True
+                    timeout=self._settings.outbox_publish_timeout_seconds,
+                )
+        except Exception as exc:
+            error = repr(exc)
+            self.last_error = error
+            logger.exception("Outbox publication failed", extra={"event_id": str(item.id)})
+        await self._repository.complete(item, self._clock.now(), error)
+        return error is None

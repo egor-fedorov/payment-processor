@@ -17,6 +17,7 @@ class PaymentRequestedEvent(BaseModel):
     webhook_url: AnyHttpUrl
     created_at: datetime
     delivery_attempt: int = Field(default=0, ge=0)
+    recovery_token: UUID | None = None
 
 
 class PaymentWebhookPayload(BaseModel):

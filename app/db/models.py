@@ -1,6 +1,7 @@
 import uuid
 from datetime import datetime
 from decimal import Decimal
+from enum import Enum as PythonEnum
 from typing import Any
 
 from sqlalchemy import DateTime, Enum, Index, Numeric, String, Text, func, text
@@ -11,7 +12,7 @@ from app.db.base import Base
 from app.domain import Currency, PaymentStatus
 
 
-def enum_values(enum_cls: type) -> list[str]:
+def enum_values(enum_cls: type[PythonEnum]) -> list[str]:
     return [member.value for member in enum_cls]
 
 
@@ -55,7 +56,6 @@ class Payment(Base):
     webhook_lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     webhook_next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     webhook_exhausted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    webhook_dead_lettered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     webhook_attempts: Mapped[int] = mapped_column(
         nullable=False,
         default=0,
@@ -72,7 +72,14 @@ class Payment(Base):
 
 class OutboxMessage(Base):
     __tablename__ = "outbox"
-    __table_args__ = (Index("ix_outbox_published_at_created_at", "published_at", "created_at"),)
+    __table_args__ = (
+        Index(
+            "ix_outbox_available",
+            "available_at",
+            "id",
+            postgresql_where=text("published_at IS NULL"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -95,3 +102,17 @@ class OutboxMessage(Base):
         server_default=func.now(),
     )
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    destination: Mapped[str] = mapped_column(
+        String(100), nullable=False, default="payments.new", server_default="payments.new"
+    )
+    deduplication_key: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    available_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    lease_token: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    publish_attempts: Mapped[int] = mapped_column(
+        nullable=False, default=0, server_default=text("0")
+    )
+    last_error: Mapped[str | None] = mapped_column(Text)

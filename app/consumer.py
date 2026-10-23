@@ -1,21 +1,17 @@
 import asyncio
-import base64
 import logging
-from datetime import UTC, datetime
 
 import httpx
 from faststream import AckPolicy, FastStream
 from faststream.rabbit import RabbitBroker
 from pydantic import ValidationError
 
-from app.contracts import DeadLetterEvent, PaymentRequestedEvent
+from app.contracts import PaymentRequestedEvent
 from app.core.config import Settings, get_settings
 from app.db.session import create_database
 from app.messaging.broker import create_broker
-from app.messaging.topology import DLQ_QUEUE, PAYMENTS_QUEUE, declare_topology, retry_queue
+from app.messaging.topology import PAYMENTS_QUEUE, declare_topology
 from app.services.payments import (
-    DeliveryBusyError,
-    DeliveryExhaustedError,
     PaymentNotFoundError,
     PaymentProcessingService,
 )
@@ -45,24 +41,9 @@ class Consumer:
             try:
                 event = PaymentRequestedEvent.model_validate_json(body)
             except ValidationError as exc:
-                await self.broker.publish(
-                    {
-                        "failure_reason": str(exc),
-                        "failed_at": datetime.now(UTC).isoformat(),
-                        "original_body_base64": base64.b64encode(body).decode("ascii"),
-                    },
-                    queue=DLQ_QUEUE,
-                    persist=True,
-                    mandatory=True,
-                    timeout=10,
-                )
+                await self.processor.record_invalid(body, str(exc))
                 return
             await self.process_event(event)
-        except DeliveryBusyError:
-            # Avoid a hot requeue loop while another worker owns the lease or a
-            # retry is not due. An exception keeps the source message recoverable.
-            await asyncio.sleep(1)
-            raise
         except Exception:
             logger.exception("Payment processing interrupted; requeueing source message")
             await asyncio.sleep(1)
@@ -70,13 +51,9 @@ class Consumer:
 
     async def process_event(self, event: PaymentRequestedEvent) -> None:
         try:
-            delivery = await self.processor.claim_delivery(event.payment_id)
+            delivery = await self.processor.claim_delivery(event.payment_id, event.recovery_token)
         except PaymentNotFoundError as exc:
-            await self.publish_dead_letter(event, 0, str(exc))
-            return
-        except DeliveryExhaustedError as exc:
-            await self.publish_dead_letter(event, exc.attempts, str(exc))
-            await self.processor.mark_dead_lettered(event.payment_id)
+            await self.processor.record_invalid(event.model_dump_json().encode(), str(exc))
             return
         if delivery is None:
             return
@@ -85,46 +62,8 @@ class Consumer:
             await self.sender.send(delivery.url, delivery.payload.model_dump(mode="json"))
         except WebhookDeliveryError as exc:
             await self.processor.record_delivery_failure(delivery, str(exc))
-            await self.retry_or_dead_letter(event, delivery.attempt, str(exc))
         else:
             await self.processor.mark_webhook_delivered(delivery)
-
-    async def publish_dead_letter(
-        self, event: PaymentRequestedEvent, attempt: int, reason: str
-    ) -> None:
-        await self.broker.publish(
-            DeadLetterEvent(
-                payment_id=event.payment_id,
-                delivery_attempt=attempt,
-                failure_reason=reason,
-                failed_at=datetime.now(UTC),
-                original_event=event,
-            ).model_dump(mode="json"),
-            queue=DLQ_QUEUE,
-            correlation_id=str(event.payment_id),
-            message_id=f"{event.payment_id}:dlq",
-            persist=True,
-            mandatory=True,
-            timeout=10,
-        )
-
-    async def retry_or_dead_letter(
-        self, event: PaymentRequestedEvent, attempt: int, reason: str
-    ) -> None:
-        if attempt < self.settings.retry_max_attempts:
-            retry_event = event.model_copy(update={"delivery_attempt": attempt})
-            await self.broker.publish(
-                retry_event.model_dump(mode="json"),
-                queue=retry_queue(attempt, self.settings),
-                correlation_id=str(event.payment_id),
-                message_id=f"{event.payment_id}:retry:{attempt}",
-                persist=True,
-                mandatory=True,
-                timeout=10,
-            )
-        else:
-            await self.publish_dead_letter(event, attempt, reason)
-            await self.processor.mark_dead_lettered(event.payment_id)
 
 
 def create_worker(settings: Settings) -> FastStream:
@@ -148,7 +87,7 @@ def create_worker(settings: Settings) -> FastStream:
     @worker.on_startup
     async def startup() -> None:
         await broker.connect()
-        await declare_topology(broker, settings)
+        await declare_topology(broker)
 
     @worker.after_shutdown
     async def shutdown() -> None:

@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     consumer_concurrency: int = Field(default=16, gt=0)
     rabbitmq_url: str = "amqp://guest:guest@rabbitmq:5672/"
     outbox_poll_interval_seconds: float = Field(default=1.0, gt=0, allow_inf_nan=False)
+    outbox_publish_concurrency: int = Field(default=8, gt=0)
+    outbox_publish_timeout_seconds: float = Field(default=10, gt=0, allow_inf_nan=False)
+    outbox_lease_seconds: float = Field(default=30, gt=0, allow_inf_nan=False)
+    outbox_retention_hours: int = Field(default=24, ge=1)
     outbox_batch_size: int = Field(default=50, gt=0)
     payment_success_rate: float = Field(default=0.9, ge=0, le=1)
     payment_delay_min_seconds: int = Field(default=2, ge=0)
@@ -34,8 +38,13 @@ class Settings(BaseSettings):
     def validate_intervals(self) -> Settings:
         if self.payment_delay_min_seconds > self.payment_delay_max_seconds:
             raise ValueError("payment delay minimum must not exceed maximum")
-        if self.webhook_lease_seconds <= self.webhook_timeout_seconds:
-            raise ValueError("webhook lease must exceed the total webhook timeout")
+        if (
+            self.webhook_lease_seconds
+            <= self.webhook_timeout_seconds + self.payment_delay_max_seconds
+        ):
+            raise ValueError("webhook lease must exceed gateway delay plus total webhook timeout")
+        if self.outbox_lease_seconds <= self.outbox_publish_timeout_seconds:
+            raise ValueError("outbox lease must exceed publication timeout")
         return self
 
     @property
