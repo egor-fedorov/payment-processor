@@ -1,15 +1,9 @@
 import asyncio
-from typing import Any, Protocol
 
 import httpx
 
-
-class WebhookDeliveryError(Exception):
-    """The receiver did not confirm delivery within the request deadline."""
-
-
-class WebhookClient(Protocol):
-    async def send(self, url: str, payload: dict[str, Any]) -> None: ...
+from app.contracts import PaymentWebhookPayload
+from app.ports import WebhookDeliveryError
 
 
 class WebhookSender:
@@ -17,13 +11,13 @@ class WebhookSender:
         self._client = client
         self._timeout = timeout_seconds
 
-    async def send(self, url: str, payload: dict[str, Any]) -> None:
+    async def send(self, url: str, payload: PaymentWebhookPayload) -> None:
         try:
             async with asyncio.timeout(self._timeout):
                 response = await self._client.post(
                     url,
-                    json=payload,
-                    headers={"X-Webhook-ID": str(payload["payment_id"])},
+                    json=payload.model_dump(mode="json"),
+                    headers={"X-Webhook-ID": str(payload.payment_id)},
                 )
                 response.raise_for_status()
         except (httpx.HTTPError, TimeoutError) as exc:

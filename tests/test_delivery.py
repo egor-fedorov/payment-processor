@@ -10,9 +10,9 @@ from app.domain import PaymentStatus
 from app.services.payments import (
     DeliveryLeaseLostError,
     PaymentNotFoundError,
-    PaymentProcessingService,
     PaymentService,
 )
+from tests.factories import create_processor
 
 pytestmark = pytest.mark.integration
 PAYLOAD = PaymentCreateRequest(
@@ -35,7 +35,7 @@ async def test_concurrent_creation_has_one_payment_and_outbox(session_factory):
 
 async def test_concurrent_claim_and_duplicate_after_success(session_factory, settings):
     payment = await create(session_factory)
-    service = PaymentProcessingService(session_factory, settings)
+    service = create_processor(session_factory, settings)
     results = await asyncio.gather(
         service.claim_delivery(payment.id), service.claim_delivery(payment.id)
     )
@@ -50,7 +50,7 @@ async def test_concurrent_claim_and_duplicate_after_success(session_factory, set
 
 async def test_three_attempts_schedule_backoff_then_one_dlq(session_factory, settings, clock):
     payment = await create(session_factory)
-    service = PaymentProcessingService(session_factory, settings, clock=clock)
+    service = create_processor(session_factory, settings, clock=clock)
     payload = None
     for attempt in range(1, 4):
         delivery = await service.claim_delivery(payment.id)
@@ -89,7 +89,7 @@ async def test_crashed_worker_lease_recovers_and_fences_old_result(
     session_factory, settings, clock
 ):
     payment = await create(session_factory)
-    service = PaymentProcessingService(session_factory, settings, clock=clock)
+    service = create_processor(session_factory, settings, clock=clock)
     old = await service.claim_delivery(payment.id)
     async with session_factory() as session:
         recovery = await session.scalar(
@@ -111,7 +111,7 @@ async def test_crashed_worker_lease_recovers_and_fences_old_result(
 
 async def test_unknown_final_attempt_is_exhausted_after_crash(session_factory, settings, clock):
     payment = await create(session_factory)
-    service = PaymentProcessingService(
+    service = create_processor(
         session_factory, settings.model_copy(update={"retry_max_attempts": 1}), clock=clock
     )
     delivery = await service.claim_delivery(payment.id)
@@ -129,7 +129,7 @@ async def test_unknown_final_attempt_is_exhausted_after_crash(session_factory, s
 
 async def test_missing_payment(session_factory, settings):
     with pytest.raises(PaymentNotFoundError):
-        await PaymentProcessingService(session_factory, settings).claim_delivery(uuid4())
+        await create_processor(session_factory, settings).claim_delivery(uuid4())
 
 
 async def test_gateway_does_not_hold_database_connection(session_factory, settings):
@@ -143,7 +143,7 @@ async def test_gateway_does_not_hold_database_connection(session_factory, settin
             await release.wait()
             return PaymentStatus.SUCCEEDED
 
-    service = PaymentProcessingService(session_factory, settings, gateway=Gateway())
+    service = create_processor(session_factory, settings, gateway=Gateway())
     task = asyncio.create_task(service.claim_delivery(payment.id))
     try:
         await asyncio.wait_for(entered.wait(), 1)

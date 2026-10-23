@@ -15,8 +15,8 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.core.config import Settings
 from app.messaging.broker import create_broker
-from app.messaging.dispatcher import OutboxDispatcher
 from app.messaging.topology import DLQ_QUEUE, PAYMENTS_QUEUE, declare_topology
+from tests.factories import create_dispatcher
 
 
 @pytest.fixture(scope="session")
@@ -108,7 +108,7 @@ async def rabbit(rabbit_namespace, settings):
 @pytest.fixture
 async def relay(session_factory, rabbit, settings):
     stop = asyncio.Event()
-    task = asyncio.create_task(OutboxDispatcher(session_factory, rabbit, settings).run(stop))
+    task = asyncio.create_task(create_dispatcher(session_factory, rabbit, settings).run(stop))
     try:
         yield
     finally:

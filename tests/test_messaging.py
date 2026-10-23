@@ -8,14 +8,12 @@ import pytest
 from sqlalchemy import select
 
 from app.api.schemas import PaymentCreateRequest
-from app.consumer import Consumer
 from app.contracts import PaymentRequestedEvent
 from app.db.models import OutboxMessage, Payment
-from app.messaging.broker import create_broker
-from app.messaging.dispatcher import OutboxDispatcher
 from app.messaging.topology import DLQ_QUEUE, PAYMENTS_QUEUE
-from app.services.payments import PaymentProcessingService, PaymentService
-from app.services.webhook import WebhookDeliveryError
+from app.ports import WebhookDeliveryError
+from app.services.payments import PaymentService
+from tests.factories import create_consumer, create_dispatcher, create_processor
 
 pytestmark = pytest.mark.integration
 
@@ -59,7 +57,8 @@ async def test_outbox_retains_unpublished_message_and_recovers(
     broken = AsyncMock()
     broken.publish.side_effect = ConnectionError("broker unavailable")
     assert (
-        await OutboxDispatcher(session_factory, broken, settings, clock=clock).dispatch_batch() == 0
+        await create_dispatcher(session_factory, broken, settings, clock=clock).dispatch_batch()
+        == 0
     )
     async with session_factory() as session:
         row = await session.scalar(select(OutboxMessage))
@@ -67,7 +66,7 @@ async def test_outbox_retains_unpublished_message_and_recovers(
         assert row.publish_attempts == 1
         assert row.last_error
     clock.advance(1)
-    dispatcher = OutboxDispatcher(session_factory, rabbit, settings, clock=clock)
+    dispatcher = create_dispatcher(session_factory, rabbit, settings, clock=clock)
     assert await dispatcher.dispatch_batch() == 1
     message = await eventually(lambda: receive(rabbit, PAYMENTS_QUEUE))
     assert json.loads(message.body)["payment_id"] == str(event.payment_id)
@@ -88,13 +87,8 @@ async def test_consumer_retries_then_delivers_or_dlq(
             raise WebhookDeliveryError("HTTP 503")
 
     sender.send.side_effect = send
-    consumer = Consumer(
-        create_broker(settings),
-        PaymentProcessingService(session_factory, settings),
-        sender,
-        settings,
-    )
-    await consumer.broker.start()
+    broker, consumer = create_consumer(session_factory, settings, sender)
+    await broker.start()
     try:
         event = await payment_event(session_factory)
 
@@ -114,11 +108,11 @@ async def test_consumer_retries_then_delivers_or_dlq(
         await consumer.process_event(event)
         assert len(attempts) == 3
     finally:
-        await consumer.broker.stop()
+        await broker.stop()
 
 
 async def test_transient_database_error_requeues_message(session_factory, rabbit, settings, relay):
-    service = PaymentProcessingService(session_factory, settings)
+    service = create_processor(session_factory, settings)
     claim = service.claim_delivery
     calls = 0
 
@@ -131,8 +125,8 @@ async def test_transient_database_error_requeues_message(session_factory, rabbit
 
     service.claim_delivery = unavailable_once
     sender = AsyncMock()
-    consumer = Consumer(create_broker(settings), service, sender, settings)
-    await consumer.broker.start()
+    broker, _consumer = create_consumer(session_factory, settings, sender, processor=service)
+    await broker.start()
     try:
         event = await payment_event(session_factory)
 
@@ -144,17 +138,12 @@ async def test_transient_database_error_requeues_message(session_factory, rabbit
         assert calls == 2
         sender.send.assert_awaited_once()
     finally:
-        await consumer.broker.stop()
+        await broker.stop()
 
 
 async def test_invalid_json_is_sent_to_dlq(rabbit, session_factory, settings, relay):
-    consumer = Consumer(
-        create_broker(settings),
-        PaymentProcessingService(session_factory, settings),
-        AsyncMock(),
-        settings,
-    )
-    await consumer.broker.start()
+    broker, _consumer = create_consumer(session_factory, settings, AsyncMock())
+    await broker.start()
     try:
         await rabbit.publish(
             b"not json", queue=PAYMENTS_QUEUE, content_type="application/json", persist=True
@@ -165,14 +154,14 @@ async def test_invalid_json_is_sent_to_dlq(rabbit, session_factory, settings, re
         assert "failure_reason" in payload
         await dlq.ack()
     finally:
-        await consumer.broker.stop()
+        await broker.stop()
 
 
 async def test_failure_recording_error_recovers_through_outbox(session_factory, rabbit, settings):
     settings = settings.model_copy(
         update={"webhook_lease_seconds": 1.5, "webhook_timeout_seconds": 0.1}
     )
-    service = PaymentProcessingService(session_factory, settings)
+    service = create_processor(session_factory, settings)
     record = service.record_delivery_failure
     calls = 0
 
@@ -186,10 +175,10 @@ async def test_failure_recording_error_recovers_through_outbox(session_factory, 
     service.record_delivery_failure = unavailable_once
     sender = AsyncMock()
     sender.send.side_effect = [WebhookDeliveryError("503"), None]
-    consumer = Consumer(create_broker(settings), service, sender, settings)
+    broker, _consumer = create_consumer(session_factory, settings, sender, processor=service)
     stop = asyncio.Event()
-    await consumer.broker.start()
-    task = asyncio.create_task(OutboxDispatcher(session_factory, rabbit, settings).run(stop))
+    await broker.start()
+    task = asyncio.create_task(create_dispatcher(session_factory, rabbit, settings).run(stop))
     try:
         event = await payment_event(session_factory)
 
@@ -204,7 +193,7 @@ async def test_failure_recording_error_recovers_through_outbox(session_factory, 
     finally:
         stop.set()
         await task
-        await consumer.broker.stop()
+        await broker.stop()
 
 
 async def test_prefetch_bounds_concurrency(session_factory, rabbit, settings, relay):
@@ -227,13 +216,8 @@ async def test_prefetch_bounds_concurrency(session_factory, rabbit, settings, re
 
     sender = AsyncMock()
     sender.send.side_effect = send
-    consumer = Consumer(
-        create_broker(settings),
-        PaymentProcessingService(session_factory, settings),
-        sender,
-        settings,
-    )
-    await consumer.broker.start()
+    broker, _consumer = create_consumer(session_factory, settings, sender)
+    await broker.start()
     try:
         for index in range(8):
             async with session_factory() as session:
@@ -257,4 +241,4 @@ async def test_prefetch_bounds_concurrency(session_factory, rabbit, settings, re
             return sender.send.await_count == 8 and active == 0
 
         await eventually(finished)
-        await consumer.broker.stop()
+        await broker.stop()

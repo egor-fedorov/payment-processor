@@ -3,12 +3,8 @@ import logging
 from contextlib import suppress
 from datetime import timedelta
 
-from faststream.rabbit import RabbitBroker
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-
-from app.core.config import Settings
-from app.db.outbox import OutboxRepository, Publication
-from app.services.gateway import Clock, SystemClock
+from app.contracts import Publication
+from app.ports import Clock, EventPublisher, OutboxStore
 
 logger = logging.getLogger(__name__)
 
@@ -16,20 +12,22 @@ logger = logging.getLogger(__name__)
 class OutboxDispatcher:
     def __init__(
         self,
-        session_factory: async_sessionmaker[AsyncSession],
-        broker: RabbitBroker,
-        settings: Settings,
+        repository: OutboxStore,
+        publisher: EventPublisher,
         *,
-        clock: Clock | None = None,
+        clock: Clock,
+        poll_interval_seconds: float,
+        publish_timeout_seconds: float,
     ) -> None:
-        self._repository = OutboxRepository(session_factory, settings)
-        self._broker = broker
-        self._settings = settings
-        self._clock = clock or SystemClock()
+        self._repository = repository
+        self._publisher = publisher
+        self._poll_interval = poll_interval_seconds
+        self._publish_timeout = publish_timeout_seconds
+        self._clock = clock
         self.last_error: str | None = None
 
     async def run(self, stop_event: asyncio.Event) -> None:
-        retry_delay = min(self._settings.outbox_poll_interval_seconds, 30.0)
+        retry_delay = min(self._poll_interval, 30.0)
         cleanup_at = self._clock.now()
         while not stop_event.is_set():
             try:
@@ -43,10 +41,10 @@ class OutboxDispatcher:
                 delay = retry_delay
                 retry_delay = min(retry_delay * 2, 30)
             else:
-                retry_delay = min(self._settings.outbox_poll_interval_seconds, 30.0)
+                retry_delay = min(self._poll_interval, 30.0)
                 if dispatched:
                     continue
-                delay = self._settings.outbox_poll_interval_seconds
+                delay = self._poll_interval
             with suppress(TimeoutError):
                 await asyncio.wait_for(stop_event.wait(), timeout=delay)
 
@@ -62,16 +60,8 @@ class OutboxDispatcher:
     async def _publish(self, item: Publication) -> bool:
         error = None
         try:
-            async with asyncio.timeout(self._settings.outbox_publish_timeout_seconds):
-                await self._broker.publish(
-                    item.payload,
-                    queue=item.destination,
-                    correlation_id=str(item.aggregate_id),
-                    message_id=str(item.id),
-                    persist=True,
-                    mandatory=True,
-                    timeout=self._settings.outbox_publish_timeout_seconds,
-                )
+            async with asyncio.timeout(self._publish_timeout):
+                await self._publisher.publish(item)
         except Exception as exc:
             error = repr(exc)
             self.last_error = error

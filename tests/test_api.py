@@ -7,9 +7,9 @@ import httpx
 import pytest
 from sqlalchemy.exc import IntegrityError
 
+from app.api.deps import get_session
 from app.api.schemas import PaymentCreateRequest
 from app.core.config import Settings
-from app.db.session import get_session
 from app.main import create_app
 from app.services.payments import PaymentService
 

@@ -1,7 +1,5 @@
-from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
-from fastapi import Request
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -31,9 +29,3 @@ def create_database(settings: Settings) -> Database:
         pool_timeout=settings.database_pool_timeout_seconds,
     )
     return Database(engine, async_sessionmaker(engine, expire_on_commit=False))
-
-
-async def get_session(request: Request) -> AsyncIterator[AsyncSession]:
-    database: Database = request.app.state.database
-    async with database.sessions() as session:
-        yield session

@@ -9,9 +9,9 @@ from sqlalchemy import select
 from app.api.schemas import PaymentCreateRequest
 from app.db.models import OutboxMessage
 from app.messaging.broker import create_broker
-from app.messaging.dispatcher import OutboxDispatcher
 from app.messaging.topology import PAYMENTS_QUEUE
 from app.services.payments import PaymentService
+from tests.factories import create_dispatcher
 
 pytestmark = [
     pytest.mark.integration,
@@ -75,7 +75,7 @@ async def test_dispatcher_recovers_after_dependency_restart(
             ).to_command(),
             "recovery",
         )
-    dispatcher = OutboxDispatcher(session_factory, rabbit, settings)
+    dispatcher = create_dispatcher(session_factory, rabbit, settings)
     stop = asyncio.Event()
     await compose("stop", service)
     task = asyncio.create_task(dispatcher.run(stop))

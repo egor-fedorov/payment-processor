@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 
 class Currency(StrEnum):
@@ -14,6 +14,9 @@ class PaymentStatus(StrEnum):
     PENDING = "pending"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
+
+
+type PaymentOutcome = Literal[PaymentStatus.SUCCEEDED, PaymentStatus.FAILED]
 
 
 @dataclass(frozen=True)

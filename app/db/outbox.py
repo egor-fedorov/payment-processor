@@ -1,4 +1,3 @@
-from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
@@ -7,6 +6,7 @@ from sqlalchemy import delete, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.contracts import Publication
 from app.core.config import Settings
 from app.db.models import OutboxMessage
 
@@ -45,16 +45,6 @@ async def cancel_recovery(session: AsyncSession, token: UUID) -> None:
             OutboxMessage.published_at.is_(None),
         )
     )
-
-
-@dataclass(frozen=True)
-class Publication:
-    id: UUID
-    token: UUID
-    aggregate_id: UUID
-    destination: str
-    payload: dict[str, Any]
-    attempt: int
 
 
 class OutboxRepository:

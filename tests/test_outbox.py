@@ -8,7 +8,7 @@ from sqlalchemy import select
 
 from app.db.models import OutboxMessage
 from app.db.outbox import OutboxRepository, schedule
-from app.messaging.dispatcher import OutboxDispatcher
+from tests.factories import create_dispatcher
 
 pytestmark = pytest.mark.integration
 
@@ -72,7 +72,7 @@ async def test_publish_timeout_keeps_event_for_retry(session_factory, settings, 
 
     broker.publish.side_effect = stalled
     settings = settings.model_copy(update={"outbox_publish_timeout_seconds": 0.01})
-    dispatcher = OutboxDispatcher(session_factory, broker, settings, clock=clock)
+    dispatcher = create_dispatcher(session_factory, broker, settings, clock=clock)
     assert await dispatcher.dispatch_batch() == 0
     async with session_factory() as session:
         row = await session.scalar(select(OutboxMessage))
@@ -93,7 +93,7 @@ async def test_broker_wait_does_not_hold_row_lock(session_factory, settings, clo
     broker = AsyncMock()
     broker.publish.side_effect = publish
     task = asyncio.create_task(
-        OutboxDispatcher(session_factory, broker, settings, clock=clock).dispatch_batch()
+        create_dispatcher(session_factory, broker, settings, clock=clock).dispatch_batch()
     )
     try:
         await asyncio.wait_for(entered.wait(), 1)

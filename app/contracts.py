@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
@@ -36,3 +37,13 @@ class DeadLetterEvent(BaseModel):
     failure_reason: str
     failed_at: datetime
     original_event: PaymentRequestedEvent
+
+
+@dataclass(frozen=True)
+class Publication:
+    id: UUID
+    token: UUID
+    aggregate_id: UUID
+    destination: str
+    payload: dict[str, Any]
+    attempt: int

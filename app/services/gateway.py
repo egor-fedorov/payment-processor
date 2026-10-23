@@ -1,25 +1,10 @@
 import asyncio
 import hashlib
 import random
-from datetime import UTC, datetime
-from typing import Protocol
 from uuid import UUID
 
 from app.core.config import Settings
-from app.domain import PaymentStatus
-
-
-class Clock(Protocol):
-    def now(self) -> datetime: ...
-
-
-class SystemClock:
-    def now(self) -> datetime:
-        return datetime.now(UTC)
-
-
-class PaymentGateway(Protocol):
-    async def process(self, payment_id: UUID) -> PaymentStatus: ...
+from app.domain import PaymentOutcome, PaymentStatus
 
 
 class SimulatedGateway:
@@ -28,7 +13,7 @@ class SimulatedGateway:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
 
-    async def process(self, payment_id: UUID) -> PaymentStatus:
+    async def process(self, payment_id: UUID) -> PaymentOutcome:
         await asyncio.sleep(
             random.uniform(
                 self._settings.payment_delay_min_seconds,
