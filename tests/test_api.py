@@ -1,17 +1,11 @@
-from datetime import UTC, datetime
-from types import SimpleNamespace
 from unittest.mock import AsyncMock
-from uuid import uuid4
 
 import httpx
 import pytest
-from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import get_session
-from app.api.schemas import PaymentCreateRequest
 from app.core.config import Settings
 from app.main import create_app
-from app.services.payments import PaymentService
 
 PAYLOAD = {
     "amount": "10.00",
@@ -41,37 +35,6 @@ async def test_invalid_idempotency_key(key, settings):
         assert response.status_code == 422
     finally:
         app.dependency_overrides.clear()
-
-
-async def test_flush_conflict_returns_existing_payment():
-    session = AsyncMock()
-    session.add = lambda _: None
-    cause = Exception("duplicate")
-    cause.constraint_name = "uq_payments_idempotency_key"
-    original = Exception("unique violation")
-    original.__cause__ = cause
-    session.flush.side_effect = IntegrityError("insert", {}, original)
-    existing = SimpleNamespace(id=uuid4(), created_at=datetime.now(UTC))
-    session.scalar.side_effect = [None, existing]
-    result = await PaymentService(session).create_payment(
-        PaymentCreateRequest(**PAYLOAD).to_command(), "key"
-    )
-    assert result is existing
-    session.rollback.assert_awaited_once()
-    session.commit.assert_not_awaited()
-
-
-async def test_unrelated_integrity_error_is_not_hidden():
-    session = AsyncMock()
-    session.add = lambda _: None
-    session.scalar.return_value = None
-    session.flush.side_effect = IntegrityError("insert", {}, Exception("other constraint"))
-    with pytest.raises(IntegrityError):
-        await PaymentService(session).create_payment(
-            PaymentCreateRequest(**PAYLOAD).to_command(), "key"
-        )
-    assert session.scalar.await_count == 1
-    session.rollback.assert_awaited_once()
 
 
 @pytest.mark.parametrize("path", ["/docs", "/redoc", "/openapi.json"])

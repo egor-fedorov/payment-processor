@@ -9,6 +9,7 @@ from app.core.clock import SystemClock
 from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging
 from app.db.session import create_database
+from app.domain import DeliveryPolicy
 from app.messaging.broker import create_broker
 from app.messaging.consumer import Consumer
 from app.messaging.topology import declare_topology, subscribe_payments
@@ -31,7 +32,14 @@ def create_worker(settings: Settings) -> FastStream:
     clock = SystemClock()
     consumer = Consumer(
         PaymentProcessingService(
-            database.sessions, settings, gateway=SimulatedGateway(settings), clock=clock
+            database.sessions,
+            DeliveryPolicy(
+                settings.retry_max_attempts,
+                settings.retry_base_delay_seconds,
+                settings.webhook_lease_seconds,
+            ),
+            gateway=SimulatedGateway(settings),
+            clock=clock,
         ),
         WebhookSender(client, settings.webhook_timeout_seconds),
         RejectedMessageService(database.sessions, clock),

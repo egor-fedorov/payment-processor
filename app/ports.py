@@ -7,6 +7,8 @@ from app.domain import PaymentOutcome
 
 
 class Clock(Protocol):
+    """Provide timezone-aware UTC timestamps for persisted deadlines."""
+
     def now(self) -> datetime: ...
 
 
@@ -33,10 +35,14 @@ class EventPublisher(Protocol):
 
 
 class OutboxStore(Protocol):
-    async def claim(self, now: datetime) -> list[Publication]: ...
+    async def claim(self, now: datetime) -> list[Publication]:
+        """Lease a bounded, disjoint batch; release the transaction before returning."""
+        ...
 
-    async def complete(
-        self, item: Publication, now: datetime, error: str | None = None
-    ) -> None: ...
+    async def complete(self, item: Publication, now: datetime, error: str | None = None) -> None:
+        """Complete or reschedule only if the publication still owns its lease token."""
+        ...
 
-    async def prune(self, now: datetime) -> None: ...
+    async def prune(self, now: datetime) -> None:
+        """Remove a bounded batch of expired history, preserving unpublished events."""
+        ...

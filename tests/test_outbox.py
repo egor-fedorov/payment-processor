@@ -6,6 +6,7 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import select
 
+from app.contracts import ScheduledEvent
 from app.db.models import OutboxMessage
 from app.db.outbox import OutboxRepository, schedule
 from tests.factories import create_dispatcher
@@ -18,7 +19,8 @@ async def enqueue(sessions, now, count=1):
         for _ in range(count):
             key = str(uuid4())
             await schedule(
-                session, payment_id=uuid4(), key=key, payload={"key": key}, available_at=now
+                session,
+                ScheduledEvent(payment_id=uuid4(), key=key, payload={"key": key}, available_at=now),
             )
 
 

@@ -20,6 +20,13 @@ type PaymentOutcome = Literal[PaymentStatus.SUCCEEDED, PaymentStatus.FAILED]
 
 
 @dataclass(frozen=True)
+class DeliveryPolicy:
+    max_attempts: int
+    base_delay_seconds: float
+    lease_seconds: float
+
+
+@dataclass(frozen=True)
 class CreatePayment:
     amount: Decimal
     currency: Currency

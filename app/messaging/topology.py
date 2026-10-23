@@ -3,8 +3,10 @@ from collections.abc import Awaitable, Callable
 from faststream import AckPolicy
 from faststream.rabbit import RabbitBroker, RabbitQueue
 
-PAYMENTS_QUEUE = RabbitQueue("payments.new", durable=True)
-DLQ_QUEUE = RabbitQueue("payments.dlq", durable=True)
+from app.contracts import DEAD_LETTER_QUEUE_NAME, PAYMENTS_QUEUE_NAME
+
+PAYMENTS_QUEUE = RabbitQueue(PAYMENTS_QUEUE_NAME, durable=True)
+DLQ_QUEUE = RabbitQueue(DEAD_LETTER_QUEUE_NAME, durable=True)
 
 
 async def declare_topology(broker: RabbitBroker) -> None:

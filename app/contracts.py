@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
@@ -6,7 +6,13 @@ from uuid import UUID
 
 from pydantic import AnyHttpUrl, BaseModel, Field
 
-from app.domain import Currency, PaymentStatus
+from app.domain import Currency, PaymentOutcome
+
+PAYMENTS_QUEUE_NAME = "payments.new"
+DEAD_LETTER_QUEUE_NAME = "payments.dlq"
+PAYMENT_REQUESTED = "payments.requested"
+PAYMENT_DEAD_LETTERED = "payments.dead_lettered"
+PAYMENT_INVALID = "payments.invalid"
 
 
 class PaymentRequestedEvent(BaseModel):
@@ -23,7 +29,7 @@ class PaymentRequestedEvent(BaseModel):
 
 class PaymentWebhookPayload(BaseModel):
     payment_id: UUID
-    status: PaymentStatus
+    status: PaymentOutcome
     amount: Decimal
     currency: Currency
     description: str
@@ -47,3 +53,14 @@ class Publication:
     destination: str
     payload: dict[str, Any]
     attempt: int
+
+
+@dataclass(frozen=True, kw_only=True)
+class ScheduledEvent:
+    payment_id: UUID
+    key: str
+    payload: dict[str, Any]
+    available_at: datetime
+    destination: str = PAYMENTS_QUEUE_NAME
+    event_type: str = PAYMENT_REQUESTED
+    headers: dict[str, Any] = field(default_factory=dict)

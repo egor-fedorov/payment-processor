@@ -6,33 +6,24 @@ from sqlalchemy import delete, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.contracts import Publication
+from app.contracts import Publication, ScheduledEvent
 from app.core.config import Settings
 from app.db.models import OutboxMessage
 
 
-async def schedule(
-    session: AsyncSession,
-    *,
-    payment_id: UUID,
-    key: str,
-    payload: dict[str, Any],
-    available_at: datetime,
-    destination: str = "payments.new",
-    event_type: str = "payments.requested",
-) -> None:
+async def schedule(session: AsyncSession, event: ScheduledEvent) -> None:
     await session.execute(
         insert(OutboxMessage)
         .values(
             id=uuid4(),
             aggregate_type="payment",
-            aggregate_id=payment_id,
-            event_type=event_type,
-            payload=payload,
-            headers={},
-            destination=destination,
-            deduplication_key=key,
-            available_at=available_at,
+            aggregate_id=event.payment_id,
+            event_type=event.event_type,
+            payload=event.payload,
+            headers=event.headers,
+            destination=event.destination,
+            deduplication_key=event.key,
+            available_at=event.available_at,
         )
         .on_conflict_do_nothing(index_elements=[OutboxMessage.deduplication_key])
     )

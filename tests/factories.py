@@ -2,6 +2,7 @@
 
 from app.core.clock import SystemClock
 from app.db.outbox import OutboxRepository
+from app.domain import DeliveryPolicy
 from app.messaging.broker import create_broker
 from app.messaging.consumer import Consumer
 from app.messaging.dispatcher import OutboxDispatcher
@@ -15,7 +16,11 @@ from app.services.rejections import RejectedMessageService
 def create_processor(sessions, settings, *, gateway=None, clock=None):
     return PaymentProcessingService(
         sessions,
-        settings,
+        DeliveryPolicy(
+            settings.retry_max_attempts,
+            settings.retry_base_delay_seconds,
+            settings.webhook_lease_seconds,
+        ),
         gateway=gateway if gateway is not None else SimulatedGateway(settings),
         clock=clock if clock is not None else SystemClock(),
     )

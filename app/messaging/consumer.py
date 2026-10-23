@@ -38,7 +38,7 @@ class Consumer:
 
     async def process_event(self, event: PaymentRequestedEvent) -> None:
         try:
-            delivery = await self.processor.claim_delivery(event.payment_id, event.recovery_token)
+            delivery = await self.processor.prepare_delivery(event.payment_id, event.recovery_token)
         except PaymentNotFoundError as exc:
             await self.rejections.record_invalid(event.model_dump_json().encode(), str(exc))
             return

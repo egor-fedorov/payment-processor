@@ -113,7 +113,7 @@ async def test_consumer_retries_then_delivers_or_dlq(
 
 async def test_transient_database_error_requeues_message(session_factory, rabbit, settings, relay):
     service = create_processor(session_factory, settings)
-    claim = service.claim_delivery
+    claim = service.prepare_delivery
     calls = 0
 
     async def unavailable_once(*args):
@@ -123,7 +123,7 @@ async def test_transient_database_error_requeues_message(session_factory, rabbit
             raise ConnectionError("database temporarily unavailable")
         return await claim(*args)
 
-    service.claim_delivery = unavailable_once
+    service.prepare_delivery = unavailable_once
     sender = AsyncMock()
     broker, _consumer = create_consumer(session_factory, settings, sender, processor=service)
     await broker.start()
