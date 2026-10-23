@@ -2,6 +2,7 @@ import asyncio
 import signal
 
 from app.core.config import Settings, get_settings
+from app.core.logging import configure_logging
 from app.db.session import create_database
 from app.messaging.broker import create_broker
 from app.messaging.dispatcher import OutboxDispatcher
@@ -23,6 +24,7 @@ async def run(settings: Settings, stop: asyncio.Event) -> None:
 
 
 async def main() -> None:
+    configure_logging()
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):

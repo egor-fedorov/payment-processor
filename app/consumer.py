@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from time import perf_counter
 
 import httpx
 from faststream import AckPolicy, FastStream
@@ -8,6 +9,7 @@ from pydantic import ValidationError
 
 from app.contracts import PaymentRequestedEvent
 from app.core.config import Settings, get_settings
+from app.core.logging import configure_logging
 from app.db.session import create_database
 from app.messaging.broker import create_broker
 from app.messaging.topology import PAYMENTS_QUEUE, declare_topology
@@ -58,12 +60,31 @@ class Consumer:
         if delivery is None:
             return
 
+        started = perf_counter()
         try:
             await self.sender.send(delivery.url, delivery.payload.model_dump(mode="json"))
         except WebhookDeliveryError as exc:
             await self.processor.record_delivery_failure(delivery, str(exc))
+            logger.info(
+                "Webhook delivery failed",
+                extra={
+                    "payment_id": str(delivery.payment_id),
+                    "attempt": delivery.attempt,
+                    "status": "retry_or_exhausted",
+                    "duration_ms": round((perf_counter() - started) * 1000, 3),
+                },
+            )
         else:
             await self.processor.mark_webhook_delivered(delivery)
+            logger.info(
+                "Webhook delivered",
+                extra={
+                    "payment_id": str(delivery.payment_id),
+                    "attempt": delivery.attempt,
+                    "status": delivery.payload.status,
+                    "duration_ms": round((perf_counter() - started) * 1000, 3),
+                },
+            )
 
 
 def create_worker(settings: Settings) -> FastStream:
@@ -100,6 +121,7 @@ def create_worker(settings: Settings) -> FastStream:
 
 
 async def main() -> None:
+    configure_logging()
     await create_worker(get_settings()).run()
 
 

@@ -9,6 +9,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.api.deps import verify_api_key
 from app.api.routes.payments import router as payments_router
 from app.core.config import Settings, get_settings
+from app.core.logging import RequestLoggingMiddleware, configure_logging
 from app.db.session import create_database
 
 
@@ -17,6 +18,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        configure_logging()
         database = create_database(settings)
         app.state.database = database
         try:
@@ -31,6 +33,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         redoc_url="/redoc" if settings.docs_enabled else None,
         openapi_url="/openapi.json" if settings.docs_enabled else None,
     )
+    application.add_middleware(RequestLoggingMiddleware)
     application.state.settings = settings
     application.include_router(payments_router, prefix=settings.api_v1_prefix)
 

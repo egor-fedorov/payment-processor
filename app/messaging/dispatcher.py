@@ -75,4 +75,13 @@ class OutboxDispatcher:
             self.last_error = error
             logger.exception("Outbox publication failed", extra={"event_id": str(item.id)})
         await self._repository.complete(item, self._clock.now(), error)
+        if error is None:
+            logger.info(
+                "Outbox event published",
+                extra={
+                    "event_id": str(item.id),
+                    "payment_id": str(item.aggregate_id),
+                    "attempt": item.attempt,
+                },
+            )
         return error is None

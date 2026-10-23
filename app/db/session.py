@@ -25,6 +25,7 @@ def create_database(settings: Settings) -> Database:
     engine = create_async_engine(
         settings.database_url,
         pool_pre_ping=True,
+        hide_parameters=True,
         pool_size=settings.database_pool_size,
         max_overflow=0,
         pool_timeout=settings.database_pool_timeout_seconds,
